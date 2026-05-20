@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Project
+runs/
+data/shards/
+data/raw/
+
+# IDE/tool
+.antigravitycli/
+.DS_Store
