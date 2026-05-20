@@ -9,6 +9,7 @@ dependencies = [
     "tiktoken==0.13.0",
     "safetensors>=0.4",
     "huggingface_hub>=0.20",
+    "pyarrow==24.0.0",
 ]
 
 [project.optional-dependencies]
