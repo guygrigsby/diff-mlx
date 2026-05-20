@@ -115,14 +115,15 @@ def tokenize_parquet_to_shards(
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--input_glob", type=str, default="data/raw/*.parquet")
+    p.add_argument("--input_glob", type=str, default="data/raw/**/*.parquet")
     p.add_argument("--out_dir", type=Path, default=Path("data/shards"))
     p.add_argument("--train_shard_max_tokens", type=int, default=100_000_000)
     p.add_argument("--val_tokens", type=int, default=75_000_000)
     p.add_argument("--val_doc_hash_mod", type=int, default=100)
     p.add_argument("--val_doc_hash_keep_below", type=int, default=1)
     args = p.parse_args()
-    files = sorted(Path().glob(args.input_glob))
+    from glob import glob as _glob
+    files = sorted(Path(p) for p in _glob(args.input_glob, recursive=True))
     if not files:
         raise SystemExit(f"No input files matched {args.input_glob}")
     meta = tokenize_parquet_to_shards(
