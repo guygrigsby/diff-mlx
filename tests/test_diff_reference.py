@@ -92,3 +92,55 @@ def test_mlx_diff_attention_matches_pytorch_reference():
         f"actual stats: mean={actual_np.mean():.4f} std={actual_np.std():.4f}; "
         f"expected stats: mean={expected_out.mean():.4f} std={expected_out.std():.4f}"
     )
+
+
+def test_mlx_diff_attention_matches_pytorch_reference_at_bf16():
+    """Cross-check at amp_dtype=bfloat16. Tolerance loosened to 1e-2 per design §7.4 / §9.0.
+
+    Same fixture and weight-copy logic as the fp32 test; only differences are
+    amp_dtype=mx.bfloat16 on the module and a looser atol.
+    """
+    if not FIXTURE.exists():
+        import pytest
+        pytest.skip(f"fixture missing: {FIXTURE}. Run scripts/generate_ref_fixture.py once.")
+
+    data = np.load(FIXTURE)
+    DIM = int(data["dim"])
+    NUM_HEADS_REF = int(data["num_heads_ref"])
+    n_heads_vanilla = NUM_HEADS_REF * 2
+    qk_head_dim = DIM // n_heads_vanilla
+
+    input_x = mx.array(data["input_x"].astype(np.float32))
+    expected_out = data["ref_output"].astype(np.float32)
+
+    with mx.stream(mx.cpu):
+        attn = DiffAttention(
+            dim=DIM,
+            n_heads_vanilla=n_heads_vanilla,
+            qk_head_dim=qk_head_dim,
+            layer_idx=1,
+            amp_dtype=mx.bfloat16,
+        )
+
+        params = attn.parameters()
+        params = _set_param(params, ["q_proj", "weight"], mx.array(data["weight__q_proj__weight"].astype(np.float32)))
+        params = _set_param(params, ["k_proj", "weight"], mx.array(data["weight__k_proj__weight"].astype(np.float32)))
+        params = _set_param(params, ["v_proj", "weight"], mx.array(data["weight__v_proj__weight"].astype(np.float32)))
+        params = _set_param(params, ["o_proj", "weight"], mx.array(data["weight__out_proj__weight"].astype(np.float32)))
+        params["lambda_q1"] = mx.array(data["weight__lambda_q1"].astype(np.float32))
+        params["lambda_k1"] = mx.array(data["weight__lambda_k1"].astype(np.float32))
+        params["lambda_q2"] = mx.array(data["weight__lambda_q2"].astype(np.float32))
+        params["lambda_k2"] = mx.array(data["weight__lambda_k2"].astype(np.float32))
+        params = _set_param(params, ["subln", "scale"], mx.array(data["weight__subln__weight"].astype(np.float32)))
+        attn.update(params)
+
+        actual = attn(input_x)
+        mx.eval(actual)
+
+    # Convert bf16 output to fp32 before numpy conversion
+    actual_fp32 = actual.astype(mx.float32)
+    actual_np = np.array(actual_fp32)
+    max_diff = float(np.abs(actual_np - expected_out).max())
+    assert max_diff < 1.1e-2, (
+        f"max |diff| = {max_diff:.3e}; expected < 1.1e-2 per design §7.4 bf16 tolerance."
+    )
