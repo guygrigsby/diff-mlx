@@ -115,3 +115,13 @@ class Transformer(nn.Module):
         x = self.final_norm(x)
         logits = x @ self.tok_embed.weight.T
         return logits
+
+
+def lambda_init_for_layer(layer_idx: int) -> float:
+    """Paper-canonical lambda_init depth schedule (1-indexed layer).
+
+        lambda_init = 0.8 - 0.6 * exp(-0.3 * (layer_idx - 1))
+
+    Layer 1 → 0.2; approaches 0.8 with depth. Per design §6.3 / paper §2.2.
+    """
+    return 0.8 - 0.6 * math.exp(-0.3 * (layer_idx - 1))
