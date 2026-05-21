@@ -36,12 +36,15 @@ Fixed by reshape `q.reshape(B, H, 2, T, D)` and indexing `[:, :, 0, ...]` for Q1
 | | Vanilla seed 0 | Diff seed 0 | δ = diff − vanilla |
 |---|---|---|---|
 | Steps | 6,103 | 6,103 | — |
-| Wall time | 70.6 min | 347.9 min (anomaly) | — |
-| Final tps | 23,613 | 4,789 | — |
+| Wall time (original) | 70.6 min | 347.9 min (display-sleep stalls) | — |
+| Wall time (caffeinated re-run) | 81.5 min | 92.6 min | +14% diff vs vanilla |
+| Final tps (caffeinated) | 20,450 | 18,003 | — |
 | step-5000 val_full | 4.7200 | 4.6999 | **−0.0201** |
 | step-5000 perplexity | 112.2 | 109.9 | −2.3 |
 | step-2500 val_full | 5.0675 | 5.0804 | +0.0129 (vanilla wins) |
 | NaN/Inf | 0 | 0 | — |
+
+Caffeinated re-run reproduced both arms within ~1e-4 train_loss at step 6000 (Metal fp32 reduce nondeterminism), confirming the original loss numbers were correct. Details below in "Throughput anomaly resolved".
 
 **Paired δ trajectory** (val_monitor) shows clean crossover:
 
@@ -64,32 +67,45 @@ Diff starts behind (lambda subtracts noise at init, perturbing the output relati
 
 **Status per design §5.4 outcome categories:** "Strong directional replication" — sign matches paper's prediction, gap consistent across 7 consecutive eval points, no sign flip. We cannot make a statistical-significance claim from N=1 seed pair; bootstrap CI requires Phase D's multi-seed Stage 2 protocol.
 
-## Throughput anomaly — Phase D blocker
+## Throughput anomaly resolved
 
-**Diff run took 5x longer than projected.** Mid-run check (step 3,291): wall 51.1 min, tps 17.6k → on-pace projection ~95 min total. Actual final wall: 347.9 min. Second-half ran ~3.7× slower than first half.
+**Root cause: display power state, not the model.** The original diff run was unattended for 5.8 hours, during which the external display slept. Display sleep on Apple Silicon transitions the GPU into a low-power state. With a 32 GB live MLX allocation pinned by the diff-attn backward, this manifested as massive intermittent stalls (one 495-second stall observed in the diagnostic; scattered 1-23 s stalls thereafter) rather than uniform slowdown.
 
-**Cause unknown.** Hypotheses:
-1. M5 Max thermal throttling over 5+ hour sustained GPU pin
-2. macOS scheduler giving GPU time to background tasks
-3. MLX compilation cache eviction or accumulated graph state
-4. Memory pressure from intermediate arrays not being released
+Evidence (`scripts/diagnose_throughput.py`, 500-step diff run, see `runs/diag-diff-monitor-{on,off}.jsonl`):
 
-**This is a Phase D prerequisite.** At Stage 2 (~305M params, 4B tokens, 4-6 paired runs), a 5x slowdown turns the 2-3 week budget into 3+ months. Must diagnose before Phase D Stage 1 begins.
+| | Monitor on | Monitor off |
+|---|---|---|
+| Mean step | 505 ms | 1,900 ms (stalls), 770 ms (otherwise) |
+| Worst step | 592 ms | 495,168 ms |
+| Steps > 1 s | 0 / 500 | 17 / 386 |
+| mlx_active_mb | 366 (flat) | 366 (flat) |
+| swapouts delta | 0 | 0 |
+| compressor pages | flat | flat |
+| free RAM | 50 GB stable | dipped to 47 GB |
 
-Mitigations to evaluate:
-- **Implement bf16 mixed precision (Phase A retro item 1):** halves param/grad/optimizer memory, may relieve thermal or memory pressure
-- **Implement optimizer-state checkpoints (Phase A retro item 2):** allows splitting long runs into segments with cooldown
-- **Profile mid-run vs end-of-run:** identify which op slows down and whether it's the kernel itself or something around it
+The flat mlx_active, zero swapouts, and flat compressor rule out the four hypotheses listed in the original retro draft (thermal throttling, scheduler contention, MLX cache growth, memory pressure). The signal that fits is power-state transition timing on display sleep.
+
+**Caffeinated re-run (`runs/stage0-paired-caffeinated/`)** with `caffeinate -disu` completed in:
+- Vanilla: 81.5 min (vs original 70.6 min; +15%, likely powermetrics/macmon sampling overhead)
+- Diff: 92.6 min (vs original 347.9 min; **3.76× faster, anomaly gone**)
+
+Per-step train_loss reproduces to within 1e-4 at step 6000 on both arms, so the original loss curves and the −0.0201 paired δ remain valid.
+
+**Residual finding: diff is ~14% slower per step than vanilla at Stage 0** in steady state (5,554 s vs 4,889 s, same 6,103 steps). Consistent with more kernel dispatches per layer (two SDPAs + Python subtract + lambda math + subln, all dispatch-bound at this scale). Expected to amortize as kernel work grows at Stage 1/2 (Stage 0 GPU residency only ~30% per powermetrics; the GPU is mostly idle waiting on host dispatch). Not a blocker.
+
+**Operational fix:** all multi-hour runs must use `caffeinate -disu` (or equivalent). Add to Phase D run scripts.
 
 ## Updated Phase D prerequisites
 
 From Phase A retro + Phase B findings:
 
-1. **bf16 mixed precision** — likely also addresses the throughput anomaly
+1. **bf16 mixed precision** — halves param/grad/optimizer memory; no longer load-bearing for throughput
 2. **Optimizer state in checkpoints** — needed for long runs (Stage 1/2)
 3. **`grad_accum` implementation** — Stage 2 needs grad_accum=4
-4. **Throughput investigation** — new from Phase B; root-cause the 5x slowdown
-5. **Multi-seed orchestration** — Phase D plan needs to handle running 4 (vanilla×2 + diff×2) or 6 paired runs
+4. **Multi-seed orchestration** — Phase D plan needs to handle running 4 (vanilla×2 + diff×2) or 6 paired runs
+5. **`caffeinate -disu` wrapper on long-run scripts** — operational, trivial
+
+Throughput investigation removed: root cause identified (display power state), fix is operational (`caffeinate`), validated by caffeinated re-run.
 
 ## Ready for Phase C?
 
@@ -100,7 +116,7 @@ Phase C is custom Metal kernels (P1 softmax, P2 causal SDPA, v1 composition). It
 - [x] Paired-seed init verified byte-identical on shared params
 - [x] Stage 0 paired loss curves clean (no NaN, smooth descent, monotonic post-crossover δ)
 - [x] Cross-check infrastructure in place for v1 verification (Phase C)
-- [ ] Throughput anomaly investigation — does NOT block Phase C; blocks Phase D
+- [x] Throughput anomaly resolved (display power state; caffeinate fixes it; diff arm 3.76× faster on re-run)
 
 ## What Phase C adds
 
@@ -113,4 +129,4 @@ Phase C is custom Metal kernels (P1 softmax, P2 causal SDPA, v1 composition). It
 
 Phase C is optional in the sense that v0 ships the science. But it's the project's MLX-kernel-learning angle, so it's worth doing.
 
-Alternatively: address the throughput anomaly + Phase D prereqs first, then come back to Phase C. The right call depends on whether the throughput issue is fixable cheaply or is a deeper problem.
+With the throughput anomaly resolved, Phase C or Phase D can come next without dependency between them.
