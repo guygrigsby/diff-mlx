@@ -126,3 +126,64 @@ def test_transformer_fp32_default_unchanged():
     tokens = mx.random.randint(0, 128, shape=(2, 16))
     logits = model(tokens)
     assert logits.dtype == mx.float32
+
+
+from train_step import train_step
+from optim import make_adamw
+
+
+def test_bf16_train_step_runs_clean():
+    cfg = ModelConfig(
+        dim=64, n_layers=2, n_heads_vanilla=4, qk_head_dim=16,
+        vocab_size=128, mlp_intermediate=128, block_size=32,
+        amp_dtype="bfloat16",
+    )
+    model = Transformer(cfg, variant="diff")
+    opt = make_adamw(lr=1e-4, weight_decay=0.0, beta1=0.9, beta2=0.95, eps=1e-8)
+    x = mx.random.randint(0, 128, shape=(2, 16))
+    y = mx.random.randint(0, 128, shape=(2, 16))
+    loss = train_step(model, opt, x, y, grad_clip=1.0)
+    assert isinstance(loss, float)
+    assert mx.array(loss).dtype == mx.float32 or isinstance(loss, float)
+    import math
+    assert not math.isnan(loss)
+    assert not math.isinf(loss)
+
+    # All params must still be fp32 storage after a step
+    def walk(p, names):
+        if isinstance(p, dict):
+            for k, v in p.items():
+                walk(v, names + [k])
+        elif isinstance(p, list):
+            for i, v in enumerate(p):
+                walk(v, names + [str(i)])
+        elif isinstance(p, mx.array):
+            full = ".".join(names)
+            assert p.dtype == mx.float32, f"param {full} drifted to {p.dtype}"
+    walk(model.parameters(), [])
+
+
+def test_fp32_and_bf16_initial_loss_within_tolerance():
+    """Same paired init, one step at fp32 vs bf16: loss within design §9.0 tolerance."""
+    base_cfg_kwargs = dict(
+        dim=64, n_layers=2, n_heads_vanilla=4, qk_head_dim=16,
+        vocab_size=128, mlp_intermediate=128, block_size=32,
+    )
+    cfg_fp32 = ModelConfig(**base_cfg_kwargs)
+    cfg_bf16 = ModelConfig(**base_cfg_kwargs, amp_dtype="bfloat16")
+
+    mx.random.seed(42)
+    m_fp32 = Transformer(cfg_fp32, variant="vanilla")
+    mx.eval(m_fp32.parameters())
+
+    mx.random.seed(42)
+    m_bf16 = Transformer(cfg_bf16, variant="vanilla")
+    mx.eval(m_bf16.parameters())
+
+    x = mx.random.randint(0, 128, shape=(2, 16))
+    y = mx.random.randint(0, 128, shape=(2, 16))
+
+    from train_step import _ce_loss
+    l_fp32 = _ce_loss(m_fp32, x, y).item()
+    l_bf16 = _ce_loss(m_bf16, x, y).item()
+    assert abs(l_fp32 - l_bf16) < 1e-2, f"fp32={l_fp32} bf16={l_bf16}"
