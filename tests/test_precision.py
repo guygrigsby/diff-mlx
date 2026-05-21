@@ -81,3 +81,48 @@ def test_diff_attention_amp_output_bf16():
     assert attn.q_proj.weight.dtype == mx.float32
     # Lambda vectors must remain fp32 regardless of amp_dtype
     assert attn.lambda_q1.dtype == mx.float32
+
+
+from model import Transformer
+from config import ModelConfig
+
+
+def test_transformer_amp_output_bf16():
+    cfg = ModelConfig(
+        dim=64, n_layers=2, n_heads_vanilla=4, qk_head_dim=16,
+        vocab_size=128, mlp_intermediate=128, block_size=32,
+        amp_dtype="bfloat16",
+    )
+    model = Transformer(cfg, variant="vanilla")
+    tokens = mx.random.randint(0, 128, shape=(2, 16))
+    logits = model(tokens)
+    # logits come out of `x @ tok_embed.weight.T`; tok_embed.weight is fp32,
+    # x is bf16 (cast at start of forward), so the matmul output dtype depends
+    # on MLX broadcast rules. We DO require: forward runs without error and
+    # output is one of {bf16, fp32}; CE loss explicitly upcasts later anyway.
+    assert logits.dtype in (mx.bfloat16, mx.float32)
+    assert logits.shape == (2, 16, 128)
+
+
+def test_transformer_amp_diff_variant_bf16():
+    cfg = ModelConfig(
+        dim=64, n_layers=2, n_heads_vanilla=4, qk_head_dim=16,
+        vocab_size=128, mlp_intermediate=128, block_size=32,
+        amp_dtype="bfloat16",
+    )
+    model = Transformer(cfg, variant="diff")
+    tokens = mx.random.randint(0, 128, shape=(2, 16))
+    logits = model(tokens)
+    assert logits.shape == (2, 16, 128)
+
+
+def test_transformer_fp32_default_unchanged():
+    """At amp_dtype='float32' (the default), behavior is unchanged."""
+    cfg = ModelConfig(
+        dim=64, n_layers=2, n_heads_vanilla=4, qk_head_dim=16,
+        vocab_size=128, mlp_intermediate=128, block_size=32,
+    )
+    model = Transformer(cfg, variant="vanilla")
+    tokens = mx.random.randint(0, 128, shape=(2, 16))
+    logits = model(tokens)
+    assert logits.dtype == mx.float32

@@ -210,6 +210,7 @@ class Block(nn.Module):
         layer_idx: int | None = None,
         rope_base: float = 10000.0,
         rms_eps: float = 1e-5,
+        amp_dtype: "mx.Dtype" = mx.float32,
     ):
         super().__init__()
         assert dim == n_heads_vanilla * qk_head_dim, (
@@ -217,7 +218,8 @@ class Block(nn.Module):
         )
         self.norm_attn = RMSNorm(dim, eps=rms_eps)
         if variant == "vanilla":
-            self.attn = VanillaMHA(dim, n_heads_vanilla, rope_base=rope_base)
+            self.attn = VanillaMHA(dim, n_heads_vanilla, rope_base=rope_base,
+                                   amp_dtype=amp_dtype)
         elif variant == "diff":
             assert layer_idx is not None, "variant='diff' requires layer_idx (1-indexed)"
             self.attn = DiffAttention(
@@ -227,11 +229,12 @@ class Block(nn.Module):
                 layer_idx=layer_idx,
                 rope_base=rope_base,
                 rms_eps=rms_eps,
+                amp_dtype=amp_dtype,
             )
         else:
             raise ValueError(f"unknown variant {variant!r}; expected 'vanilla' or 'diff'")
         self.norm_mlp = RMSNorm(dim, eps=rms_eps)
-        self.mlp = SwiGLU(dim, mlp_intermediate)
+        self.mlp = SwiGLU(dim, mlp_intermediate, amp_dtype=amp_dtype)
 
     def __call__(self, x: mx.array) -> mx.array:
         x = x + self.attn(self.norm_attn(x))
@@ -249,8 +252,10 @@ class Transformer(nn.Module):
     """
     def __init__(self, cfg, variant: str = "vanilla"):
         super().__init__()
+        from config import resolve_amp_dtype
         self.cfg = cfg
         self.variant = variant
+        self._amp_dtype = resolve_amp_dtype(cfg.amp_dtype)
         self.tok_embed = nn.Embedding(cfg.vocab_size, cfg.dim)
         self.blocks = [
             Block(
@@ -262,6 +267,7 @@ class Transformer(nn.Module):
                 layer_idx=(i + 1),  # 1-indexed for paper's lambda_init schedule
                 rope_base=cfg.rope_base,
                 rms_eps=cfg.rms_eps,
+                amp_dtype=self._amp_dtype,
             )
             for i in range(cfg.n_layers)
         ]
@@ -269,7 +275,7 @@ class Transformer(nn.Module):
         # Tied embeddings: no separate lm_head linear; forward uses embed.weight.T
 
     def __call__(self, tokens: mx.array) -> mx.array:
-        x = self.tok_embed(tokens)
+        x = self.tok_embed(tokens).astype(self._amp_dtype)
         for block in self.blocks:
             x = block(x)
         x = self.final_norm(x)
