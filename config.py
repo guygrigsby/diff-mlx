@@ -1,5 +1,15 @@
 from dataclasses import dataclass
 
+import mlx.core as mx
+
+
+def resolve_amp_dtype(s: str) -> "mx.Dtype":
+    if s == "float32":
+        return mx.float32
+    if s == "bfloat16":
+        return mx.bfloat16
+    raise ValueError(f"unknown amp_dtype {s!r}; expected 'float32' or 'bfloat16'")
+
 
 @dataclass(frozen=True)
 class ModelConfig:
@@ -13,6 +23,7 @@ class ModelConfig:
     rope_base: float = 10000.0
     rms_eps: float = 1e-5
     tie_embeddings: bool = True
+    amp_dtype: str = "float32"
 
     @classmethod
     def stage0(cls) -> "ModelConfig":
@@ -36,6 +47,7 @@ class ModelConfig:
             vocab_size=100_277,
             mlp_intermediate=2048,
             block_size=2048,
+            amp_dtype="bfloat16",
         )
 
     @classmethod
@@ -48,6 +60,7 @@ class ModelConfig:
             vocab_size=100_277,
             mlp_intermediate=2752,
             block_size=2048,
+            amp_dtype="bfloat16",
         )
 
 

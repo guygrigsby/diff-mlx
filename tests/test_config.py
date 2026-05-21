@@ -1,4 +1,32 @@
-from config import ModelConfig, TrainConfig
+import mlx.core as mx
+import pytest
+from config import ModelConfig, TrainConfig, resolve_amp_dtype
+
+
+def test_resolve_amp_dtype_float32():
+    assert resolve_amp_dtype("float32") is mx.float32
+
+
+def test_resolve_amp_dtype_bfloat16():
+    assert resolve_amp_dtype("bfloat16") is mx.bfloat16
+
+
+def test_resolve_amp_dtype_unknown_raises():
+    with pytest.raises(ValueError, match="amp_dtype"):
+        resolve_amp_dtype("float16")
+
+
+def test_modelconfig_default_amp_dtype_is_float32():
+    cfg = ModelConfig.stage0()
+    assert cfg.amp_dtype == "float32"
+
+
+def test_modelconfig_stage1_default_bf16():
+    assert ModelConfig.stage1().amp_dtype == "bfloat16"
+
+
+def test_modelconfig_stage2_default_bf16():
+    assert ModelConfig.stage2().amp_dtype == "bfloat16"
 
 
 def test_model_config_stage0():
