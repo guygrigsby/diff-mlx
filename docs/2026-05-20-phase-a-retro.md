@@ -41,9 +41,10 @@ Total Phase B+D training compute: ~6-7 days wall over the active stages. Plus Ph
 These are spec gaps that don't bite at Stage 0 scale but need addressing before Phase B (paired-seed) or Phase D (Stage 1/2):
 
 1. **Precision is pure fp32, not bf16-mixed-with-fp32-master as design §9.0 specifies.**
-   - At Stage 0 (~30M params, ~120MB), fp32 is fine. At Stage 2 (~305M), bf16 forward would give ~2x throughput and halve param/grad memory.
-   - The `to_bf16_view` and `to_bf16_dict` helpers exist in `optim.py` but aren't wired into `train.py`.
-   - **Address before Phase D Stage 1.**
+   - **Closed 2026-05-21.** Implemented via `LinearAMP` (option A from
+     `docs/2026-05-21-bf16-mixed-precision-design.md`): fp32 params, bf16 cast
+     inside forward at op boundaries. Stage 1/2 ModelConfig defaults switched
+     to `amp_dtype="bfloat16"`.
 
 2. **Optimizer state (AdamW m, v) is NOT saved in checkpoints.**
    - `save_checkpoint` only writes model params. If a long run crashes mid-way, AdamW state is lost on resume.
