@@ -52,11 +52,11 @@ class LinearAMP(nn.Linear):
 
 class SwiGLU(nn.Module):
     """SwiGLU MLP: down(silu(gate(x)) * up(x)). All linears bias=False."""
-    def __init__(self, dim: int, intermediate: int):
+    def __init__(self, dim: int, intermediate: int, amp_dtype: "mx.Dtype" = mx.float32):
         super().__init__()
-        self.gate = nn.Linear(dim, intermediate, bias=False)
-        self.up = nn.Linear(dim, intermediate, bias=False)
-        self.down = nn.Linear(intermediate, dim, bias=False)
+        self.gate = LinearAMP(dim, intermediate, bias=False, amp_dtype=amp_dtype)
+        self.up = LinearAMP(dim, intermediate, bias=False, amp_dtype=amp_dtype)
+        self.down = LinearAMP(intermediate, dim, bias=False, amp_dtype=amp_dtype)
 
     def __call__(self, x: mx.array) -> mx.array:
         return self.down(nn.silu(self.gate(x)) * self.up(x))
@@ -68,7 +68,8 @@ class VanillaMHA(nn.Module):
     Uses mx.fast.rope (traditional=True = LLaMA rotate-halves) and
     mx.fast.scaled_dot_product_attention (mask="causal", scale required kw-only).
     """
-    def __init__(self, dim: int, n_heads: int, rope_base: float = 10000.0):
+    def __init__(self, dim: int, n_heads: int, rope_base: float = 10000.0,
+                 amp_dtype: "mx.Dtype" = mx.float32):
         super().__init__()
         assert dim % n_heads == 0
         self.dim = dim
@@ -76,10 +77,10 @@ class VanillaMHA(nn.Module):
         self.head_dim = dim // n_heads
         self.rope_base = rope_base
         self.scale = 1.0 / math.sqrt(self.head_dim)
-        self.q_proj = nn.Linear(dim, dim, bias=False)
-        self.k_proj = nn.Linear(dim, dim, bias=False)
-        self.v_proj = nn.Linear(dim, dim, bias=False)
-        self.o_proj = nn.Linear(dim, dim, bias=False)
+        self.q_proj = LinearAMP(dim, dim, bias=False, amp_dtype=amp_dtype)
+        self.k_proj = LinearAMP(dim, dim, bias=False, amp_dtype=amp_dtype)
+        self.v_proj = LinearAMP(dim, dim, bias=False, amp_dtype=amp_dtype)
+        self.o_proj = LinearAMP(dim, dim, bias=False, amp_dtype=amp_dtype)
 
     def __call__(self, x: mx.array) -> mx.array:
         B, T, _ = x.shape
@@ -118,6 +119,7 @@ class DiffAttention(nn.Module):
         layer_idx: int,
         rope_base: float = 10000.0,
         rms_eps: float = 1e-5,
+        amp_dtype: "mx.Dtype" = mx.float32,
     ):
         super().__init__()
         assert n_heads_vanilla % 2 == 0, "n_heads_vanilla must be even (paired into diff heads)"
@@ -133,10 +135,10 @@ class DiffAttention(nn.Module):
         self.lambda_init = lambda_init_for_layer(layer_idx)
 
         # Projections (all dim → dim, bias=False)
-        self.q_proj = nn.Linear(dim, dim, bias=False)
-        self.k_proj = nn.Linear(dim, dim, bias=False)
-        self.v_proj = nn.Linear(dim, dim, bias=False)
-        self.o_proj = nn.Linear(dim, dim, bias=False)
+        self.q_proj = LinearAMP(dim, dim, bias=False, amp_dtype=amp_dtype)
+        self.k_proj = LinearAMP(dim, dim, bias=False, amp_dtype=amp_dtype)
+        self.v_proj = LinearAMP(dim, dim, bias=False, amp_dtype=amp_dtype)
+        self.o_proj = LinearAMP(dim, dim, bias=False, amp_dtype=amp_dtype)
 
         # Lambda vectors (fp32, init randn * 0.1 per design §6.3)
         self.lambda_q1 = mx.random.normal((qk_head_dim,), dtype=mx.float32) * 0.1

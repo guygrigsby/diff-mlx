@@ -51,3 +51,33 @@ def test_linear_amp_with_bias():
     y = amp(x)
     assert y.dtype == mx.bfloat16
     assert amp.bias.dtype == mx.float32
+
+
+from model import SwiGLU, VanillaMHA, DiffAttention
+
+
+def test_swiglu_amp_output_bf16():
+    mlp = SwiGLU(dim=32, intermediate=64, amp_dtype=mx.bfloat16)
+    x = mx.random.normal((2, 8, 32), dtype=mx.float32)
+    y = mlp(x)
+    assert y.dtype == mx.bfloat16
+    assert mlp.gate.weight.dtype == mx.float32
+
+
+def test_vanilla_mha_amp_output_bf16():
+    attn = VanillaMHA(dim=64, n_heads=4, amp_dtype=mx.bfloat16)
+    x = mx.random.normal((2, 16, 64), dtype=mx.float32)
+    y = attn(x)
+    assert y.dtype == mx.bfloat16
+    assert attn.q_proj.weight.dtype == mx.float32
+
+
+def test_diff_attention_amp_output_bf16():
+    attn = DiffAttention(dim=64, n_heads_vanilla=4, qk_head_dim=16,
+                         layer_idx=1, amp_dtype=mx.bfloat16)
+    x = mx.random.normal((2, 16, 64), dtype=mx.float32)
+    y = attn(x)
+    assert y.dtype == mx.bfloat16
+    assert attn.q_proj.weight.dtype == mx.float32
+    # Lambda vectors must remain fp32 regardless of amp_dtype
+    assert attn.lambda_q1.dtype == mx.float32
