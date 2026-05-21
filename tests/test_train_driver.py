@@ -31,7 +31,8 @@ def test_train_run_smoke_writes_metrics_and_checkpoint(tmp_path):
         micro_batch=2, eval_every=20, full_eval_every=50,
         monitoring_tokens=500, full_eval_tokens=2000, save_every=25,
     )
-    train_run(model_cfg, train_cfg, shards_dir, run_dir, seed=0, variant="vanilla")
+    train_run(model_cfg, train_cfg, shards_dir, run_dir,
+              data_seed=0, model_seed=0, variant="vanilla")
     assert (run_dir / "metrics.jsonl").exists()
     assert (run_dir / "config.json").exists()
     assert (run_dir / "latest.safetensors").exists()

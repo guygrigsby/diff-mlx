@@ -34,23 +34,38 @@ def train_run(
     train_cfg: TrainConfig,
     shards_dir: Path,
     run_dir: Path,
-    seed: int = 0,
+    data_seed: int = 0,
+    model_seed: int = 0,
     variant: str = "vanilla",
+    init_state_dict: dict | None = None,
 ) -> None:
-    """Run one training stage to completion. Writes metrics, checkpoints, metadata."""
+    """Run one training stage to completion. Writes metrics, checkpoints, metadata.
+
+    Args:
+      data_seed: seeds the data sampler RNG. Shared across paired runs so the
+        same seed s sees the same batch order across variants.
+      model_seed: seeds MLX random for model init. Varies per seed in paired
+        analysis. Ignored if init_state_dict is provided (state-dict overrides init).
+      variant: "vanilla" or "diff" (passed to Transformer constructor).
+      init_state_dict: optional pre-built state dict to override default init,
+        used by the paired-seed init protocol (design §9.7) — pass diff's
+        state-dict copied from vanilla.
+    """
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     shards_dir = Path(shards_dir)
 
-    mx.random.seed(seed)
-    np.random.seed(seed)
-    rng = np.random.default_rng(seed)
+    mx.random.seed(model_seed)
+    rng = np.random.default_rng(data_seed)
 
     train_loader = ShardLoader(shards_dir, "train")
     val_loader = ShardLoader(shards_dir, "val")
     data_meta = json.loads((shards_dir / "meta.json").read_text())
 
-    model = Transformer(model_cfg)
+    model = Transformer(model_cfg, variant=variant)
+    if init_state_dict is not None:
+        model.update(init_state_dict)
+
     optimizer = make_adamw(
         lr=0.0,
         weight_decay=train_cfg.weight_decay,
@@ -64,9 +79,10 @@ def train_run(
         train_cfg_dict=asdict(train_cfg),
         git_hash=current_hash(), git_dirty=is_dirty(),
         mlx_version=_mlx_version(),
-        seed=seed, data_meta=data_meta,
+        seed=model_seed, data_meta=data_meta,
     )
     (run_dir / "variant.txt").write_text(variant + "\n")
+    (run_dir / "seeds.txt").write_text(f"data_seed={data_seed}\nmodel_seed={model_seed}\n")
 
     eff_tokens_per_step = train_cfg.micro_batch * model_cfg.block_size * train_cfg.grad_accum
     total_steps = max(1, train_cfg.total_tokens // eff_tokens_per_step)
@@ -124,13 +140,16 @@ def main() -> None:
     p.add_argument("--stage", choices=["stage0", "stage1", "stage2"], required=True)
     p.add_argument("--shards_dir", type=Path, default=Path("data/shards"))
     p.add_argument("--run_dir", type=Path, required=True)
-    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--data_seed", type=int, default=0)
+    p.add_argument("--model_seed", type=int, default=0)
     p.add_argument("--variant", choices=["vanilla", "diff"], default="vanilla")
     args = p.parse_args()
-    if args.variant != "vanilla":
-        raise SystemExit("Phase A: only vanilla supported. Diff lands in Phase B.")
     model_cfg, train_cfg = _build_cfgs(args.stage)
-    train_run(model_cfg, train_cfg, args.shards_dir, args.run_dir, args.seed, args.variant)
+    train_run(
+        model_cfg, train_cfg, args.shards_dir, args.run_dir,
+        data_seed=args.data_seed, model_seed=args.model_seed,
+        variant=args.variant,
+    )
 
 
 if __name__ == "__main__":
