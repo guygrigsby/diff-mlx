@@ -70,6 +70,96 @@ class VanillaMHA(nn.Module):
         return self.o_proj(out)
 
 
+class DiffAttention(nn.Module):
+    """Paper-canonical Differential Attention (Ye et al., ICLR 2025).
+
+    Per design §6.3:
+    - n_heads_diff = n_heads_vanilla // 2
+    - qk_head_dim = D (same as vanilla head_dim)
+    - v_head_dim = 2 * D
+    - All projections dim → dim (same total widths as vanilla)
+    - subln = RMSNorm over 2D applied per-head AFTER differential subtraction
+    - lambda = exp(dot(λ_q1, λ_k1)) - exp(dot(λ_q2, λ_k2)) + λ_init  (scalar, per-forward)
+    - Output scaled by (1 - λ_init) before o_proj
+    - RoPE via mx.fast.rope(traditional=False) on Q1/K1/Q2/K2 independently
+    - SDPA via mx.fast.scaled_dot_product_attention(scale=1/√D, mask="causal")
+
+    v0 forward: two SDPA calls with shared V at width 2D, subtract outputs
+    (design §7.1 linearity rewrite — no T×T map materialization).
+    """
+    def __init__(
+        self,
+        dim: int,
+        n_heads_vanilla: int,
+        qk_head_dim: int,
+        layer_idx: int,
+        rope_base: float = 10000.0,
+        rms_eps: float = 1e-5,
+    ):
+        super().__init__()
+        assert n_heads_vanilla % 2 == 0, "n_heads_vanilla must be even (paired into diff heads)"
+        assert n_heads_vanilla * qk_head_dim == dim, "dim must equal n_heads_vanilla * qk_head_dim"
+        self.dim = dim
+        self.n_heads_vanilla = n_heads_vanilla
+        self.n_heads_diff = n_heads_vanilla // 2
+        self.qk_head_dim = qk_head_dim
+        self.v_head_dim = 2 * qk_head_dim
+        self.layer_idx = layer_idx
+        self.rope_base = rope_base
+        self.scale = 1.0 / math.sqrt(qk_head_dim)
+        self.lambda_init = lambda_init_for_layer(layer_idx)
+
+        # Projections (all dim → dim, bias=False)
+        self.q_proj = nn.Linear(dim, dim, bias=False)
+        self.k_proj = nn.Linear(dim, dim, bias=False)
+        self.v_proj = nn.Linear(dim, dim, bias=False)
+        self.o_proj = nn.Linear(dim, dim, bias=False)
+
+        # Lambda vectors (fp32, init randn * 0.1 per design §6.3)
+        self.lambda_q1 = mx.random.normal((qk_head_dim,), dtype=mx.float32) * 0.1
+        self.lambda_k1 = mx.random.normal((qk_head_dim,), dtype=mx.float32) * 0.1
+        self.lambda_q2 = mx.random.normal((qk_head_dim,), dtype=mx.float32) * 0.1
+        self.lambda_k2 = mx.random.normal((qk_head_dim,), dtype=mx.float32) * 0.1
+
+        # subln: RMSNorm over the V head width (2D), per-head application
+        self.subln = RMSNorm(self.v_head_dim, eps=rms_eps)
+
+    def _compute_lambda(self) -> mx.array:
+        """λ = exp(dot(λ_q1, λ_k1)) - exp(dot(λ_q2, λ_k2)) + λ_init (scalar, fp32)."""
+        l1 = mx.exp(mx.sum(self.lambda_q1.astype(mx.float32) * self.lambda_k1.astype(mx.float32)))
+        l2 = mx.exp(mx.sum(self.lambda_q2.astype(mx.float32) * self.lambda_k2.astype(mx.float32)))
+        return l1 - l2 + self.lambda_init
+
+    def __call__(self, x: mx.array) -> mx.array:
+        B, T, _ = x.shape
+        H = self.n_heads_diff
+        D = self.qk_head_dim
+
+        q = self.q_proj(x).reshape(B, T, 2 * H, D).transpose(0, 2, 1, 3)  # (B, 2H, T, D)
+        k = self.k_proj(x).reshape(B, T, 2 * H, D).transpose(0, 2, 1, 3)  # (B, 2H, T, D)
+        v = self.v_proj(x).reshape(B, T, H, 2 * D).transpose(0, 2, 1, 3)  # (B, H, T, 2D)
+
+        q1, q2 = q[:, :H, :, :], q[:, H:, :, :]
+        k1, k2 = k[:, :H, :, :], k[:, H:, :, :]
+
+        q1 = mx.fast.rope(q1, dims=D, traditional=False, base=self.rope_base, scale=1.0, offset=0)
+        q2 = mx.fast.rope(q2, dims=D, traditional=False, base=self.rope_base, scale=1.0, offset=0)
+        k1 = mx.fast.rope(k1, dims=D, traditional=False, base=self.rope_base, scale=1.0, offset=0)
+        k2 = mx.fast.rope(k2, dims=D, traditional=False, base=self.rope_base, scale=1.0, offset=0)
+
+        out1 = mx.fast.scaled_dot_product_attention(q1, k1, v, scale=self.scale, mask="causal")
+        out2 = mx.fast.scaled_dot_product_attention(q2, k2, v, scale=self.scale, mask="causal")
+
+        lam = self._compute_lambda()
+        out = out1 - lam.astype(out1.dtype) * out2
+
+        out = self.subln(out)
+        out = (1.0 - self.lambda_init) * out
+
+        out = out.transpose(0, 2, 1, 3).reshape(B, T, H * 2 * D)  # H*2D = dim
+        return self.o_proj(out)
+
+
 class Block(nn.Module):
     """Pre-norm transformer block: x = x + attn(norm(x)); x = x + mlp(norm(x))."""
     def __init__(self, dim: int, n_heads: int, mlp_intermediate: int,
