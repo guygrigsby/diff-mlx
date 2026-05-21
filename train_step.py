@@ -1,0 +1,64 @@
+"""Single training step: forward, CE loss, backward, optimizer step."""
+from __future__ import annotations
+import mlx.core as mx
+import mlx.nn as nn
+
+
+def _ce_loss(model: nn.Module, x: mx.array, y: mx.array) -> mx.array:
+    """Mean cross-entropy. Logits cast to fp32 (design §9.0) for stability."""
+    logits = model(x).astype(mx.float32)
+    log_probs = nn.log_softmax(logits, axis=-1)
+    gathered = mx.take_along_axis(log_probs, y[..., None], axis=-1).squeeze(-1)
+    return -gathered.mean()
+
+
+def compute_loss_and_grads(model: nn.Module, x: mx.array, y: mx.array):
+    """Returns (loss, grads_pytree)."""
+    loss_and_grad = nn.value_and_grad(model, _ce_loss)
+    loss, grads = loss_and_grad(model, x, y)
+    return loss, grads
+
+
+def _global_grad_norm(grads) -> mx.array:
+    """L2 norm over all gradient tensors (mlx-style nested dict/list pytree)."""
+    sq_sum = mx.zeros(())
+
+    def walk(g):
+        nonlocal sq_sum
+        if isinstance(g, dict):
+            for v in g.values():
+                walk(v)
+        elif isinstance(g, list):
+            for v in g:
+                walk(v)
+        elif isinstance(g, mx.array):
+            sq_sum = sq_sum + (g.astype(mx.float32) ** 2).sum()
+
+    walk(grads)
+    return mx.sqrt(sq_sum)
+
+
+def _clip_grads(grads, clip: float, current_norm: mx.array):
+    factor = mx.minimum(mx.array(1.0), clip / (current_norm + 1e-8))
+
+    def walk(g):
+        if isinstance(g, dict):
+            return {k: walk(v) for k, v in g.items()}
+        if isinstance(g, list):
+            return [walk(v) for v in g]
+        if isinstance(g, mx.array):
+            return g * factor.astype(g.dtype)
+        return g
+
+    return walk(grads)
+
+
+def train_step(model: nn.Module, optimizer, x: mx.array, y: mx.array,
+               grad_clip: float = 1.0) -> float:
+    """Run one optimizer step. Returns the scalar loss as a Python float."""
+    loss, grads = compute_loss_and_grads(model, x, y)
+    norm = _global_grad_norm(grads)
+    grads = _clip_grads(grads, grad_clip, norm)
+    optimizer.update(model, grads)
+    mx.eval(model.parameters(), optimizer.state)
+    return loss.item()

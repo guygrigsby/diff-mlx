@@ -1,0 +1,24 @@
+[project]
+name = "diff-mlx"
+version = "0.1.0"
+description = "Differential Transformer reproduction in MLX on Apple Silicon"
+requires-python = ">=3.12"
+dependencies = [
+    "mlx==0.31.2",
+    "numpy>=1.26",
+    "tiktoken==0.13.0",
+    "safetensors>=0.4",
+    "huggingface_hub>=0.20",
+    "pyarrow==24.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-xdist>=3.5",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+pythonpath = ["."]
