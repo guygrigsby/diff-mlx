@@ -1,6 +1,6 @@
 # diff-mlx — Design document
 
-**Status:** Design approved 2026-05-20; revised 2026-05-20 across seven review passes. R1-R6 captured in §16. **R7 (Phase B implementation finding):** while vendoring `microsoft/unilm/Diff-Transformer/multihead_diffattn.py` for the reference cross-check fixture, discovered the reference calls `apply_rotary_emb(..., interleaved=True)` — GPT-J consecutive-pair rotation, NOT LLaMA's rotate-halves. R6's choice of `traditional=False` was self-consistent for "LLaMA convention" but wrong for paper fidelity. Both variants (vanilla + diff) switched to `traditional=True` to match the paper's reference. The internal A/B is still apples-to-apples (both variants use the same convention); the cross-check test can now compare directly without weight pre-permutation. The Phase A Stage 0 vanilla checkpoint trained under `traditional=False` is obsolete and will be re-run.
+**Status:** Design approved 2026-05-20; revised 2026-05-20 across eight review passes. R1-R6 captured in §16. **R7 (Phase B implementation finding):** while vendoring `microsoft/unilm/Diff-Transformer/multihead_diffattn.py` for the reference cross-check fixture, discovered the reference calls `apply_rotary_emb(..., interleaved=True)` — GPT-J consecutive-pair rotation, NOT LLaMA's rotate-halves. R6's choice of `traditional=False` was self-consistent for "LLaMA convention" but wrong for paper fidelity. Both variants (vanilla + diff) switched to `traditional=True` to match the paper's reference. The internal A/B is still apples-to-apples (both variants use the same convention); the cross-check test can now compare directly without weight pre-permutation. The Phase A Stage 0 vanilla checkpoint trained under `traditional=False` is obsolete and will be re-run. **R8 (Task 7 implementation finding):** the cross-check test caught a second paper-fidelity bug — §6.3 specified `q1, q2 = q[:, :H, :, :], q[:, H:, :, :]` (halves split) but the reference does `attn_weights.view(bsz, num_heads, 2, T, T)` (row-major (H, 2) split, i.e. interleaved Q1=q[2h], Q2=q[2h+1]). Internal v0 oracle agreement masked the bug because the oracle used the same split as the module. §6.3 and `model.DiffAttention` switched to the interleaved split. With interleaved split + RoPE traditional=True + CPU-stream matmul, the cross-check reaches ~1e-7 against the PyTorch reference; on GPU stream it reaches ~1.7e-3 due to Metal's reduced-precision fp32 matmul.
 **Project home:** `/Users/guygrigsby/projects/diff-mlx/`
 **Owner:** Guy J. Grigsby (`guy@grigsby.dev`)
 
@@ -399,9 +399,15 @@ q = q.transpose(0, 2, 1, 3)                                  # (B, 2H, T, D)
 k = k.transpose(0, 2, 1, 3)                                  # (B, 2H, T, D)
 v = v.transpose(0, 2, 1, 3)                                  # (B,  H, T, 2D)
 
-# 3. Split Q/K into the two head-pairs along the head axis (axis=1)
-q1, q2 = q[:, :H, :, :], q[:, H:, :, :]                      # each (B, H, T, D)
-k1, k2 = k[:, :H, :, :], k[:, H:, :, :]                      # each (B, H, T, D)
+# 3. Split Q/K into the two head-pairs. Paper-canonical layout (matches the
+#    microsoft/unilm reference): the 2H heads are viewed as (H, 2) in row-major
+#    order, so diff-head h pairs Q1 = q[2h], Q2 = q[2h+1]. NOT halves split
+#    q[:H] vs q[H:] (those are different layouts and produce different outputs).
+#    See R8 in §16 and the reference cross-check test for the discriminator.
+q_pair = q.reshape(B, H, 2, T, D)                            # (B, H, 2, T, D)
+k_pair = k.reshape(B, H, 2, T, D)                            # (B, H, 2, T, D)
+q1, q2 = q_pair[:, :, 0, :, :], q_pair[:, :, 1, :, :]        # each (B, H, T, D)
+k1, k2 = k_pair[:, :, 0, :, :], k_pair[:, :, 1, :, :]        # each (B, H, T, D)
 
 # 4. RoPE on Q1, K1, Q2, K2 independently via the native Metal kernel
 #    (consecutive-pair / GPT-J interleaved layout; traditional=True; see §6.1 backbone details)
@@ -938,4 +944,6 @@ Design approved by Guy 2026-05-20. Revised same day across two Codex review pass
 
 **Round 7 (Phase B implementation finding):** While vendoring `microsoft/unilm/Diff-Transformer/multihead_diffattn.py` for the Task 6 reference fixture, found that the paper's reference explicitly uses `apply_rotary_emb(..., interleaved=True)` (line 122-123) — GPT-J consecutive-pair RoPE, NOT LLaMA rotate-halves. R6 picked `traditional=False` because we reasoned "LLaMA convention is rotate-halves and we're LLaMA-style." That reasoning was internally consistent but didn't actually match the paper's reference. For paper-fidelity reproduction (the project's stated goal in §1), both variants are switched to `traditional=True` so they match the paper. The internal A/B is still apples-to-apples (both variants use the same RoPE), and the reference cross-check test can now compare directly without weight pre-permutation. **Phase A's Stage 0 vanilla checkpoint (trained under `traditional=False`) is obsolete and being re-run.**
 
-Next step: re-run Stage 0 vanilla under `traditional=True`, then proceed with Phase B Task 7 (reference cross-check test) onward.
+**Round 8 (Phase B Task 7 implementation finding):** Running the cross-check test exposed a second paper-fidelity bug: §6.3 pseudocode used `q1, q2 = q[:, :H, :, :], q[:, H:, :, :]` (halves split), but the reference does `attn_weights.view(bsz, num_heads, 2, T, T)` — row-major split into `(H, 2)`, meaning diff-head h pairs Q1 = q[2h], Q2 = q[2h+1] (interleaved/strided split). The two layouts give numerically very different outputs (max |diff| ≈ 0.77 with halves, ~1e-7 with interleaved on CPU stream). The internal v0 SDPA oracle test passed under the halves split because the oracle used the same (buggy) split — a textbook example of why design §7.4 mandates a cross-check against a different codebase. §6.3 pseudocode and `model.DiffAttention.__call__` switched to the interleaved split; the oracle test was updated to match. Additionally noted: MLX's default GPU/Metal fp32 matmul uses reduced precision (~1e-3 per matmul), which prevents direct fp32 comparison against PyTorch on GPU. The cross-check test runs under `mx.stream(mx.cpu)` for IEEE fp32 to validate the algorithm itself; production training/eval on GPU is unaffected because both variants share the same reduced-precision path.
+
+Next step: re-run Stage 0 vanilla under `traditional=True` AND the corrected (interleaved) head-split, then proceed with the rest of Phase B.

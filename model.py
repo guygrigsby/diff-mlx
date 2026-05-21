@@ -139,8 +139,14 @@ class DiffAttention(nn.Module):
         k = self.k_proj(x).reshape(B, T, 2 * H, D).transpose(0, 2, 1, 3)  # (B, 2H, T, D)
         v = self.v_proj(x).reshape(B, T, H, 2 * D).transpose(0, 2, 1, 3)  # (B, H, T, 2D)
 
-        q1, q2 = q[:, :H, :, :], q[:, H:, :, :]
-        k1, k2 = k[:, :H, :, :], k[:, H:, :, :]
+        # Paper-canonical split (matches microsoft/unilm reference): the 2H heads are
+        # viewed as (H, 2) in row-major order, so diff-head h pairs Q1 = q[2h], Q2 = q[2h+1]
+        # (NOT halves split q[:H] vs q[H:] — that's a different layout). See design §7.4
+        # cross-check test for the discriminator.
+        q_pair = q.reshape(B, H, 2, T, D)
+        k_pair = k.reshape(B, H, 2, T, D)
+        q1, q2 = q_pair[:, :, 0, :, :], q_pair[:, :, 1, :, :]
+        k1, k2 = k_pair[:, :, 0, :, :], k_pair[:, :, 1, :, :]
 
         q1 = mx.fast.rope(q1, dims=D, traditional=True, base=self.rope_base, scale=1.0, offset=0)
         q2 = mx.fast.rope(q2, dims=D, traditional=True, base=self.rope_base, scale=1.0, offset=0)

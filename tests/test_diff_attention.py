@@ -79,8 +79,11 @@ def test_diff_attention_matches_sdpa_oracle():
     q = attn.q_proj(x).reshape(B, T, 2 * H, D).transpose(0, 2, 1, 3)
     k = attn.k_proj(x).reshape(B, T, 2 * H, D).transpose(0, 2, 1, 3)
     v = attn.v_proj(x).reshape(B, T, H, 2 * D).transpose(0, 2, 1, 3)
-    q1, q2 = q[:, :H, :, :], q[:, H:, :, :]
-    k1, k2 = k[:, :H, :, :], k[:, H:, :, :]
+    # Interleaved split (must match module): heads viewed as (H, 2) -> Q1=q[2h], Q2=q[2h+1].
+    q_pair = q.reshape(B, H, 2, T, D)
+    k_pair = k.reshape(B, H, 2, T, D)
+    q1, q2 = q_pair[:, :, 0, :, :], q_pair[:, :, 1, :, :]
+    k1, k2 = k_pair[:, :, 0, :, :], k_pair[:, :, 1, :, :]
     q1 = mx.fast.rope(q1, dims=D, traditional=True, base=10000.0, scale=1.0, offset=0)
     q2 = mx.fast.rope(q2, dims=D, traditional=True, base=10000.0, scale=1.0, offset=0)
     k1 = mx.fast.rope(k1, dims=D, traditional=True, base=10000.0, scale=1.0, offset=0)
