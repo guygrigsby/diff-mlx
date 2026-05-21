@@ -1,4 +1,5 @@
 from pathlib import Path
+import pytest
 import mlx.core as mx
 from paired_init import build_paired_models, save_paired_init, load_paired_init
 from config import ModelConfig
@@ -92,3 +93,30 @@ def test_paired_init_diff_lambda_init_constants_are_correct():
     # Block i (0-indexed list) has layer_idx = i+1
     assert diff.blocks[0].attn.layer_idx == 1
     assert diff.blocks[-1].attn.layer_idx == cfg.n_layers
+
+
+@pytest.mark.parametrize("amp_dtype", ["float32", "bfloat16"])
+def test_paired_init_byte_identical_under_amp(amp_dtype):
+    """fp32 storage of shared params must be byte-identical regardless of amp_dtype.
+
+    Storage is fp32 always; amp_dtype only affects forward cast.
+    """
+    cfg = ModelConfig(
+        dim=64, n_layers=2, n_heads_vanilla=4, qk_head_dim=16,
+        vocab_size=128, mlp_intermediate=128, block_size=32,
+        amp_dtype=amp_dtype,
+    )
+    vanilla, diff = build_paired_models(cfg, seed=0)
+    mx.eval(vanilla.parameters(), diff.parameters())
+
+    # Shared params: tok_embed, q/k/v/o on first block (per design §9.7)
+    assert mx.array_equal(
+        vanilla.tok_embed.weight, diff.tok_embed.weight
+    ).item()
+    # Spot-check a projection
+    assert mx.array_equal(
+        vanilla.blocks[0].attn.q_proj.weight,
+        diff.blocks[0].attn.q_proj.weight,
+    ).item()
+    assert vanilla.tok_embed.weight.dtype == mx.float32
+    assert diff.tok_embed.weight.dtype == mx.float32
