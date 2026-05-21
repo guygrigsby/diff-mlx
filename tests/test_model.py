@@ -106,19 +106,71 @@ def test_vanilla_mha_causal_property():
 # Block
 
 def test_block_shape():
-    block = Block(dim=128, n_heads=4, mlp_intermediate=352)
+    block = Block(dim=128, n_heads_vanilla=4, qk_head_dim=32, mlp_intermediate=352)
     x = mx.random.normal((2, 16, 128), dtype=mx.float32)
     y = block(x)
     assert y.shape == x.shape
 
 
 def test_block_has_norms_attn_mlp():
-    block = Block(dim=128, n_heads=4, mlp_intermediate=352)
+    block = Block(dim=128, n_heads_vanilla=4, qk_head_dim=32, mlp_intermediate=352)
     params = block.parameters()
     assert "norm_attn" in params
     assert "norm_mlp" in params
     assert "attn" in params
     assert "mlp" in params
+
+
+def test_block_diff_variant_shape():
+    block = Block(
+        dim=128, n_heads_vanilla=4, qk_head_dim=32, mlp_intermediate=352,
+        variant="diff", layer_idx=1,
+    )
+    x = mx.random.normal((2, 16, 128), dtype=mx.float32)
+    y = block(x)
+    assert y.shape == x.shape
+
+
+def test_block_variant_picks_correct_attn_class():
+    from model import DiffAttention as _DiffAttention
+    block_v = Block(dim=128, n_heads_vanilla=4, qk_head_dim=32, mlp_intermediate=352)
+    block_d = Block(
+        dim=128, n_heads_vanilla=4, qk_head_dim=32, mlp_intermediate=352,
+        variant="diff", layer_idx=1,
+    )
+    assert isinstance(block_v.attn, VanillaMHA)
+    assert isinstance(block_d.attn, _DiffAttention)
+
+
+def test_block_diff_requires_layer_idx():
+    import pytest
+    with pytest.raises(AssertionError, match="layer_idx"):
+        Block(
+            dim=128, n_heads_vanilla=4, qk_head_dim=32, mlp_intermediate=352,
+            variant="diff",  # layer_idx omitted
+        )
+
+
+def test_transformer_diff_variant_forward_shape():
+    cfg = ModelConfig.stage0()
+    model = Transformer(cfg, variant="diff")
+    x = mx.array(np.random.randint(0, cfg.vocab_size, size=(2, 64), dtype=np.int32))
+    logits = model(x)
+    assert logits.shape == (2, 64, cfg.vocab_size)
+
+
+def test_transformer_diff_blocks_are_diffattention():
+    from model import DiffAttention as _DiffAttention
+    cfg = ModelConfig.stage0()
+    model = Transformer(cfg, variant="diff")
+    assert all(isinstance(b.attn, _DiffAttention) for b in model.blocks)
+
+
+def test_transformer_diff_layer_idx_is_1_indexed():
+    cfg = ModelConfig.stage0()
+    model = Transformer(cfg, variant="diff")
+    assert model.blocks[0].attn.layer_idx == 1
+    assert model.blocks[-1].attn.layer_idx == cfg.n_layers
 
 
 # Transformer
