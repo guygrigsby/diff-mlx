@@ -5,8 +5,8 @@
 - **Init source:** paired-seed init protocol (design §9.7) — `runs/init-seed0/diff.safetensors`. Shared backbone + attention projections byte-identical to vanilla; lambda vectors and subln from separate RNG stream.
 - **Config:** ModelConfig.stage0() + TrainConfig.stage0()
 - **Total steps:** 6,103
-- **Wall time:** 347.9 min (5.8 hours) — **see Throughput Anomaly below**
-- **Final tps:** 4,789 tokens/sec
+- **Wall time:** 347.9 min (5.8 hours) — degraded by display-sleep stalls (see "Throughput anomaly resolved" below)
+- **Final tps:** 4,789 tokens/sec (degraded; caffeinated re-run sustained 18,003 tps)
 - **NaN/Inf:** none
 
 ## Final state
@@ -19,19 +19,14 @@
 
 This **directionally reproduces** the paper's central claim at small scale, single seed pair.
 
-## Throughput anomaly — flagged for Phase D investigation
-Mid-run check (during training): 3,291 steps completed in 51.1 min → ~17.6k tps. Projection at that rate: ~95 min total. **Actual final wall: 347.9 min, ~3.7× slower in the second half.**
+## Throughput anomaly resolved
+**Root cause: display power state.** The run was unattended for 5.8 hours; the external display slept partway through, dropping the GPU into a low-power state and producing massive intermittent stalls (495 s and 23 s outliers observed in the post-hoc diagnostic). Not thermal, scheduler, MLX cache, or memory pressure.
 
-Possible causes (Phase D prereq to investigate):
-- Thermal throttling on M5 Max over a 5+ hour run
-- macOS scheduler / background process competing
-- MLX compilation cache eviction or graph state growth
-- Memory pressure from accumulated intermediate arrays
+**Validation:** caffeinated re-run at `runs/stage0-paired-caffeinated/stage0-paired-diff-seed0/` with `caffeinate -disu` completed in 92.6 min (3.76× faster). Per-step train_loss reproduced within 1e-4 at step 6000, so the loss curves and paired δ in this directory remain valid.
 
-If this slowdown is reproducible at Stage 1/2 scale, the 2-3 week design budget is at risk. Mitigations to evaluate:
-1. Implement the deferred bf16 mixed precision (design §9.0) — halves param/grad/optimizer memory, may relieve thermal/memory pressure
-2. Implement optimizer-state checkpoints (design Phase A retro item 2) so long runs can be split into segments with cooldown between
-3. Profile the diff run to find which op slows down
+**Diagnostic data:** `runs/diag-diff-monitor-{on,off}.jsonl` (from `scripts/diagnose_throughput.py`).
+
+**Full writeup:** `docs/2026-05-20-phase-b-retro.md`, "Throughput anomaly resolved".
 
 ## RoPE / head-split
 - RoPE: `mx.fast.rope(traditional=True)` (paper-canonical interleaved, fixed in design round 7)
