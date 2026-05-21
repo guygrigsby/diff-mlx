@@ -1,6 +1,6 @@
 # diff-mlx — Design document
 
-**Status:** Design approved 2026-05-20; revised 2026-05-20 across six review passes (Codex ×4, self-review ×1, Gemini ×1, Antigravity ×1). R1-R5 captured in §16. **R6 (Antigravity, verified):** RoPE switched to native `mx.fast.rope` kernel; Antigravity's claim that `traditional=True` matches LLaMA was verified backwards (mlx-lm and MLX docstring both confirm `traditional=False` is the LLaMA/GPT-NeoX rotate-halves convention); §6.1 + §6.3 updated to use `traditional=False` with an inline note flagging the third-party error.
+**Status:** Design approved 2026-05-20; revised 2026-05-20 across seven review passes. R1-R6 captured in §16. **R7 (Phase B implementation finding):** while vendoring `microsoft/unilm/Diff-Transformer/multihead_diffattn.py` for the reference cross-check fixture, discovered the reference calls `apply_rotary_emb(..., interleaved=True)` — GPT-J consecutive-pair rotation, NOT LLaMA's rotate-halves. R6's choice of `traditional=False` was self-consistent for "LLaMA convention" but wrong for paper fidelity. Both variants (vanilla + diff) switched to `traditional=True` to match the paper's reference. The internal A/B is still apples-to-apples (both variants use the same convention); the cross-check test can now compare directly without weight pre-permutation. The Phase A Stage 0 vanilla checkpoint trained under `traditional=False` is obsolete and will be re-run.
 **Project home:** `/Users/guygrigsby/projects/diff-mlx/`
 **Owner:** Guy J. Grigsby (`guy@grigsby.dev`)
 
@@ -324,8 +324,8 @@ Param estimates: ~30M / ~162M / ~305M, with ~26M / ~77M / ~103M in embeddings (c
 | Final norm before LM head | RMSNorm | Same form as the per-block pre-norms |
 | RMSNorm epsilon | `1e-5` | Standard; applied as `x * scale / sqrt(mean(x²) + eps)` |
 | RMSNorm affine | Learned `scale` of shape `(last_dim,)`, init to 1.0; no bias | Per-block pre-norm, post-MLP norm, final norm, and diff-attn `subln` all use the same form, differing only in `last_dim` |
-| RoPE implementation | `mx.fast.rope(x, dims=qk_head_dim, traditional=False, base=10000.0, scale=1.0, offset=0)` — native Metal kernel, expects `(B, H, T, D)` layout. NO manual `cos`/`sin` tables in Python. |
-| RoPE layout | **Rotate-halves** (GPT-NeoX / LLaMA convention): pair `(x_i, x_{i + D/2})` for `i ∈ [0, D/2)`, apply 2×2 rotation. **Critical:** `traditional=False` in MLX = rotate-halves; `traditional=True` would give consecutive-pair (original RoFormer) rotation, which is **incompatible** with our LLaMA-style reference checks. (One third-party suggestion got this flag backwards — verify against `mlx-lm/models/llama.py` which uses `rope_traditional=False`.) |
+| RoPE implementation | `mx.fast.rope(x, dims=qk_head_dim, traditional=True, base=10000.0, scale=1.0, offset=0)` — native Metal kernel, expects `(B, H, T, D)` layout. NO manual `cos`/`sin` tables in Python. |
+| RoPE layout | **Consecutive-pair / GPT-J interleaved** (matches the Microsoft Diff-Transformer reference): pair `(x_{2i}, x_{2i+1})` for `i ∈ [0, D/2)`, apply 2×2 rotation. **Critical:** `traditional=True` in MLX = consecutive-pair rotation (RoFormer / GPT-J style); `traditional=False` is rotate-halves (GPT-NeoX / LLaMA). The paper's reference (`microsoft/unilm/Diff-Transformer/multihead_diffattn.py`, line 122-123) explicitly calls `apply_rotary_emb(..., interleaved=True)`, so we use `traditional=True` to match. NOTE: this DIFFERS from LLaMA / mlx-lm's default convention; we deliberately use the paper-canonical interleaved convention here for fidelity. Both variants (vanilla MHA + diff-attn) use the same convention so the internal A/B is apples-to-apples. |
 | RoPE base | 10000 (passed as `base=10000.0` to `mx.fast.rope`) | §6.1 arch table |
 | RoPE precision | Handled inside the native kernel; inputs in bf16, internal trig in fp32, output in bf16 | No precision tuning needed in user code |
 | LM head bias | None (tied to embeddings, which have no bias) | |
@@ -404,12 +404,12 @@ q1, q2 = q[:, :H, :, :], q[:, H:, :, :]                      # each (B, H, T, D)
 k1, k2 = k[:, :H, :, :], k[:, H:, :, :]                      # each (B, H, T, D)
 
 # 4. RoPE on Q1, K1, Q2, K2 independently via the native Metal kernel
-#    (rotate-halves layout; traditional=False; see §6.1 backbone details)
+#    (consecutive-pair / GPT-J interleaved layout; traditional=True; see §6.1 backbone details)
 import mlx.core.fast as mxf
-q1 = mxf.rope(q1, dims=D, traditional=False, base=10000.0, scale=1.0, offset=0)
-q2 = mxf.rope(q2, dims=D, traditional=False, base=10000.0, scale=1.0, offset=0)
-k1 = mxf.rope(k1, dims=D, traditional=False, base=10000.0, scale=1.0, offset=0)
-k2 = mxf.rope(k2, dims=D, traditional=False, base=10000.0, scale=1.0, offset=0)
+q1 = mxf.rope(q1, dims=D, traditional=True, base=10000.0, scale=1.0, offset=0)
+q2 = mxf.rope(q2, dims=D, traditional=True, base=10000.0, scale=1.0, offset=0)
+k1 = mxf.rope(k1, dims=D, traditional=True, base=10000.0, scale=1.0, offset=0)
+k2 = mxf.rope(k2, dims=D, traditional=True, base=10000.0, scale=1.0, offset=0)
 
 # 5. Two causal SDPA calls sharing V (canonical signature; (B, H, T, ·) shapes)
 #    v0 path: built-in SDPA. v1 path: our P2 SDPA kernel. Same algebra either way.
@@ -934,6 +934,8 @@ Design approved by Guy 2026-05-20. Revised same day across two Codex review pass
 
 **Round 5 (Codex):** **Eval cadence split** (§9.3) — fixed 75M-token eval every 1000 steps would consume ~2.3B forward-only tokens at Stage 1 (more than the 2B training budget); now a ~2M-token monitoring slice for cadence plus full 50-100M eval at sparse milestones (end-of-warmup, every ~5000 steps, end). **Paired-seed init resolved internal conflict** (§9.7) — pre-register copying attention projections (q/k/v/o all `(dim, dim)` matching shape) along with backbone; eliminates the "copy o_proj" vs "o_proj optional" contradiction. **Third Stage 2 seed pre-registered** before Stage 2 begins (§5.4) — N decided on Stage 0/1 throughput only; any post-hoc 3rd seed labeled exploratory and excluded from primary report. **fp32 master weights pinned** (§9.0) — bf16 forward cast from fp32 master; without it bf16 params + fp32 AdamW updates silently quantize away small updates. **v1 memory gate measures full step** (§7.2) — forward+backward+optimizer peak, not per-call forward; custom-function autograd retains saved tensors across layers. **§6.3 pseudocode rewritten** in canonical `(B, H, T, D)` shapes with explicit `mx.fast.scaled_dot_product_attention` calls — no ambiguous bare `@` over `(T, H, D)` shapes that would mislead the implementation.
 
-**Round 6 (Antigravity, then verified):** Switched RoPE from manual `apply_rope(q, cos, sin)` to native `mx.fast.rope` (C++/Metal-optimized). Verified the `traditional` flag direction: Antigravity's suggestion that `traditional=True` matches LLaMA was backwards — `mlx-lm/models/llama.py` uses `rope_traditional=False`, and the MLX docstring confirms `traditional=True` means consecutive-pair rotation (original RoFormer), `traditional=False` means rotate-halves (GPT-NeoX / LLaMA). §6.1 backbone table and §6.3 forward pseudocode updated to use `mx.fast.rope(..., traditional=False, base=10000.0, scale=1.0, offset=0)`, with an inline note flagging the third-party error so the implementer doesn't re-introduce the bug.
+**Round 6 (Antigravity, then verified):** Switched RoPE from manual `apply_rope(q, cos, sin)` to native `mx.fast.rope` (C++/Metal-optimized). Verified the `traditional` flag direction: Antigravity's suggestion that `traditional=True` matches LLaMA was backwards — `mlx-lm/models/llama.py` uses `rope_traditional=False`, and the MLX docstring confirms `traditional=True` means consecutive-pair rotation (original RoFormer), `traditional=False` means rotate-halves (GPT-NeoX / LLaMA). §6.1 backbone table and §6.3 forward pseudocode were updated to use `traditional=False` based on the "LLaMA-style" framing. Phase A trained Stage 0 vanilla under this convention.
 
-Next step: `writing-plans` for the implementation plan.
+**Round 7 (Phase B implementation finding):** While vendoring `microsoft/unilm/Diff-Transformer/multihead_diffattn.py` for the Task 6 reference fixture, found that the paper's reference explicitly uses `apply_rotary_emb(..., interleaved=True)` (line 122-123) — GPT-J consecutive-pair RoPE, NOT LLaMA rotate-halves. R6 picked `traditional=False` because we reasoned "LLaMA convention is rotate-halves and we're LLaMA-style." That reasoning was internally consistent but didn't actually match the paper's reference. For paper-fidelity reproduction (the project's stated goal in §1), both variants are switched to `traditional=True` so they match the paper. The internal A/B is still apples-to-apples (both variants use the same RoPE), and the reference cross-check test can now compare directly without weight pre-permutation. **Phase A's Stage 0 vanilla checkpoint (trained under `traditional=False`) is obsolete and being re-run.**
+
+Next step: re-run Stage 0 vanilla under `traditional=True`, then proceed with Phase B Task 7 (reference cross-check test) onward.

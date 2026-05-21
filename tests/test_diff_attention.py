@@ -81,10 +81,10 @@ def test_diff_attention_matches_sdpa_oracle():
     v = attn.v_proj(x).reshape(B, T, H, 2 * D).transpose(0, 2, 1, 3)
     q1, q2 = q[:, :H, :, :], q[:, H:, :, :]
     k1, k2 = k[:, :H, :, :], k[:, H:, :, :]
-    q1 = mx.fast.rope(q1, dims=D, traditional=False, base=10000.0, scale=1.0, offset=0)
-    q2 = mx.fast.rope(q2, dims=D, traditional=False, base=10000.0, scale=1.0, offset=0)
-    k1 = mx.fast.rope(k1, dims=D, traditional=False, base=10000.0, scale=1.0, offset=0)
-    k2 = mx.fast.rope(k2, dims=D, traditional=False, base=10000.0, scale=1.0, offset=0)
+    q1 = mx.fast.rope(q1, dims=D, traditional=True, base=10000.0, scale=1.0, offset=0)
+    q2 = mx.fast.rope(q2, dims=D, traditional=True, base=10000.0, scale=1.0, offset=0)
+    k1 = mx.fast.rope(k1, dims=D, traditional=True, base=10000.0, scale=1.0, offset=0)
+    k2 = mx.fast.rope(k2, dims=D, traditional=True, base=10000.0, scale=1.0, offset=0)
     scale = 1.0 / math.sqrt(D)
     out1 = mx.fast.scaled_dot_product_attention(q1, k1, v, scale=scale, mask="causal")
     out2 = mx.fast.scaled_dot_product_attention(q2, k2, v, scale=scale, mask="causal")

@@ -42,7 +42,7 @@ class SwiGLU(nn.Module):
 class VanillaMHA(nn.Module):
     """Standard MHA: q/k/v/o all (dim, dim), bias=False. RoPE on q/k. Causal mask.
 
-    Uses mx.fast.rope (traditional=False = LLaMA rotate-halves) and
+    Uses mx.fast.rope (traditional=True = LLaMA rotate-halves) and
     mx.fast.scaled_dot_product_attention (mask="causal", scale required kw-only).
     """
     def __init__(self, dim: int, n_heads: int, rope_base: float = 10000.0):
@@ -63,8 +63,8 @@ class VanillaMHA(nn.Module):
         q = self.q_proj(x).reshape(B, T, self.n_heads, self.head_dim).transpose(0, 2, 1, 3)
         k = self.k_proj(x).reshape(B, T, self.n_heads, self.head_dim).transpose(0, 2, 1, 3)
         v = self.v_proj(x).reshape(B, T, self.n_heads, self.head_dim).transpose(0, 2, 1, 3)
-        q = mx.fast.rope(q, dims=self.head_dim, traditional=False, base=self.rope_base, scale=1.0, offset=0)
-        k = mx.fast.rope(k, dims=self.head_dim, traditional=False, base=self.rope_base, scale=1.0, offset=0)
+        q = mx.fast.rope(q, dims=self.head_dim, traditional=True, base=self.rope_base, scale=1.0, offset=0)
+        k = mx.fast.rope(k, dims=self.head_dim, traditional=True, base=self.rope_base, scale=1.0, offset=0)
         out = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask="causal")
         out = out.transpose(0, 2, 1, 3).reshape(B, T, self.dim)
         return self.o_proj(out)
@@ -81,7 +81,7 @@ class DiffAttention(nn.Module):
     - subln = RMSNorm over 2D applied per-head AFTER differential subtraction
     - lambda = exp(dot(λ_q1, λ_k1)) - exp(dot(λ_q2, λ_k2)) + λ_init  (scalar, per-forward)
     - Output scaled by (1 - λ_init) before o_proj
-    - RoPE via mx.fast.rope(traditional=False) on Q1/K1/Q2/K2 independently
+    - RoPE via mx.fast.rope(traditional=True) on Q1/K1/Q2/K2 independently
     - SDPA via mx.fast.scaled_dot_product_attention(scale=1/√D, mask="causal")
 
     v0 forward: two SDPA calls with shared V at width 2D, subtract outputs
@@ -142,10 +142,10 @@ class DiffAttention(nn.Module):
         q1, q2 = q[:, :H, :, :], q[:, H:, :, :]
         k1, k2 = k[:, :H, :, :], k[:, H:, :, :]
 
-        q1 = mx.fast.rope(q1, dims=D, traditional=False, base=self.rope_base, scale=1.0, offset=0)
-        q2 = mx.fast.rope(q2, dims=D, traditional=False, base=self.rope_base, scale=1.0, offset=0)
-        k1 = mx.fast.rope(k1, dims=D, traditional=False, base=self.rope_base, scale=1.0, offset=0)
-        k2 = mx.fast.rope(k2, dims=D, traditional=False, base=self.rope_base, scale=1.0, offset=0)
+        q1 = mx.fast.rope(q1, dims=D, traditional=True, base=self.rope_base, scale=1.0, offset=0)
+        q2 = mx.fast.rope(q2, dims=D, traditional=True, base=self.rope_base, scale=1.0, offset=0)
+        k1 = mx.fast.rope(k1, dims=D, traditional=True, base=self.rope_base, scale=1.0, offset=0)
+        k2 = mx.fast.rope(k2, dims=D, traditional=True, base=self.rope_base, scale=1.0, offset=0)
 
         out1 = mx.fast.scaled_dot_product_attention(q1, k1, v, scale=self.scale, mask="causal")
         out2 = mx.fast.scaled_dot_product_attention(q2, k2, v, scale=self.scale, mask="causal")
