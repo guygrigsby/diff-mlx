@@ -27,6 +27,29 @@ class RMSNorm(nn.Module):
         return (out * self.scale.astype(mx.float32)).astype(in_dtype)
 
 
+class LinearAMP(nn.Linear):
+    """nn.Linear that casts weight/bias to `amp_dtype` inside forward.
+
+    Storage stays in the dtype of `self.weight` (fp32 by default, set at init).
+    Forward output is in `amp_dtype`. Grads through `value_and_grad` accumulate
+    in `self.weight.dtype` via the implicit graph cast.
+
+    When `amp_dtype` equals the weight dtype, this is a no-op vs nn.Linear.
+    """
+    def __init__(self, in_features: int, out_features: int, bias: bool = True,
+                 amp_dtype: "mx.Dtype" = mx.float32):
+        super().__init__(in_features, out_features, bias=bias)
+        self.amp_dtype = amp_dtype
+
+    def __call__(self, x: mx.array) -> mx.array:
+        w = self.weight.astype(self.amp_dtype)
+        x = x.astype(self.amp_dtype)
+        out = x @ w.T
+        if "bias" in self:
+            out = out + self.bias.astype(self.amp_dtype)
+        return out
+
+
 class SwiGLU(nn.Module):
     """SwiGLU MLP: down(silu(gate(x)) * up(x)). All linears bias=False."""
     def __init__(self, dim: int, intermediate: int):
