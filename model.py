@@ -161,12 +161,44 @@ class DiffAttention(nn.Module):
 
 
 class Block(nn.Module):
-    """Pre-norm transformer block: x = x + attn(norm(x)); x = x + mlp(norm(x))."""
-    def __init__(self, dim: int, n_heads: int, mlp_intermediate: int,
-                 rope_base: float = 10000.0, rms_eps: float = 1e-5):
+    """Pre-norm transformer block. Variant selects attention type.
+
+    variant="vanilla": uses VanillaMHA(dim, n_heads_vanilla)
+    variant="diff":    uses DiffAttention(dim, n_heads_vanilla, qk_head_dim, layer_idx)
+
+    qk_head_dim is required and must satisfy dim == n_heads_vanilla * qk_head_dim.
+    layer_idx is required for variant="diff" (1-indexed).
+    """
+    def __init__(
+        self,
+        dim: int,
+        n_heads_vanilla: int,
+        qk_head_dim: int,
+        mlp_intermediate: int,
+        variant: str = "vanilla",
+        layer_idx: int | None = None,
+        rope_base: float = 10000.0,
+        rms_eps: float = 1e-5,
+    ):
         super().__init__()
+        assert dim == n_heads_vanilla * qk_head_dim, (
+            f"dim={dim} != n_heads_vanilla*qk_head_dim={n_heads_vanilla * qk_head_dim}"
+        )
         self.norm_attn = RMSNorm(dim, eps=rms_eps)
-        self.attn = VanillaMHA(dim, n_heads, rope_base=rope_base)
+        if variant == "vanilla":
+            self.attn = VanillaMHA(dim, n_heads_vanilla, rope_base=rope_base)
+        elif variant == "diff":
+            assert layer_idx is not None, "variant='diff' requires layer_idx (1-indexed)"
+            self.attn = DiffAttention(
+                dim=dim,
+                n_heads_vanilla=n_heads_vanilla,
+                qk_head_dim=qk_head_dim,
+                layer_idx=layer_idx,
+                rope_base=rope_base,
+                rms_eps=rms_eps,
+            )
+        else:
+            raise ValueError(f"unknown variant {variant!r}; expected 'vanilla' or 'diff'")
         self.norm_mlp = RMSNorm(dim, eps=rms_eps)
         self.mlp = SwiGLU(dim, mlp_intermediate)
 
@@ -179,21 +211,28 @@ class Block(nn.Module):
 class Transformer(nn.Module):
     """Pre-norm LLaMA-style transformer with tied embeddings.
 
+    variant="vanilla" uses VanillaMHA in every block (Phase A baseline).
+    variant="diff"    uses DiffAttention in every block (Phase B+).
+
     forward(token_ids: (B, T)) -> logits: (B, T, vocab_size)
     """
-    def __init__(self, cfg):
+    def __init__(self, cfg, variant: str = "vanilla"):
         super().__init__()
         self.cfg = cfg
+        self.variant = variant
         self.tok_embed = nn.Embedding(cfg.vocab_size, cfg.dim)
         self.blocks = [
             Block(
                 dim=cfg.dim,
-                n_heads=cfg.n_heads_vanilla,
+                n_heads_vanilla=cfg.n_heads_vanilla,
+                qk_head_dim=cfg.qk_head_dim,
                 mlp_intermediate=cfg.mlp_intermediate,
+                variant=variant,
+                layer_idx=(i + 1),  # 1-indexed for paper's lambda_init schedule
                 rope_base=cfg.rope_base,
                 rms_eps=cfg.rms_eps,
             )
-            for _ in range(cfg.n_layers)
+            for i in range(cfg.n_layers)
         ]
         self.final_norm = RMSNorm(cfg.dim, eps=cfg.rms_eps)
         # Tied embeddings: no separate lm_head linear; forward uses embed.weight.T
