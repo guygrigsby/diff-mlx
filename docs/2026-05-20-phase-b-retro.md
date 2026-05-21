@@ -99,11 +99,11 @@ Per-step train_loss reproduces to within 1e-4 at step 6000 on both arms, so the 
 
 From Phase A retro + Phase B findings:
 
-1. **bf16 mixed precision** — halves param/grad/optimizer memory; no longer load-bearing for throughput
+1. ~~**bf16 mixed precision**~~ — **closed 2026-05-21.** Implemented via `LinearAMP` (option A from `docs/2026-05-21-bf16-mixed-precision-design.md`). 17 new tests pass. Stage 1/2 configs default `amp_dtype="bfloat16"`.
 2. **Optimizer state in checkpoints** — needed for long runs (Stage 1/2)
 3. **`grad_accum` implementation** — Stage 2 needs grad_accum=4
 4. **Multi-seed orchestration** — Phase D plan needs to handle running 4 (vanilla×2 + diff×2) or 6 paired runs
-5. **`caffeinate -disu` wrapper on long-run scripts** — operational, trivial
+5. ~~**`caffeinate -disu` wrapper on long-run scripts**~~ — **closed 2026-05-21** (commit `869b6e1`).
 
 Throughput investigation removed: root cause identified (display power state), fix is operational (`caffeinate`), validated by caffeinated re-run.
 
