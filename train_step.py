@@ -62,3 +62,47 @@ def train_step(model: nn.Module, optimizer, x: mx.array, y: mx.array,
     optimizer.update(model, grads)
     mx.eval(model.parameters(), optimizer.state)
     return loss.item()
+
+
+def train_step_with_accum(model: nn.Module, optimizer, batches,
+                           grad_clip: float = 1.0) -> float:
+    """Accumulate gradients over a sequence of (x, y) micro-batches, then
+    apply one optimizer step on the averaged grads.
+
+    Returns the mean loss across the micro-batches as a Python float.
+    """
+    n = len(batches)
+    assert n >= 1, "train_step_with_accum requires at least one batch"
+
+    accum_grads = None
+    total_loss = mx.zeros(())
+    for x, y in batches:
+        loss, grads = compute_loss_and_grads(model, x, y)
+        total_loss = total_loss + loss
+
+        def add_to(a, b):
+            if isinstance(b, dict):
+                return {k: add_to(a[k] if a is not None else None, b[k]) for k in b}
+            if isinstance(b, list):
+                return [add_to(a[i] if a is not None else None, b[i]) for i in range(len(b))]
+            if isinstance(b, mx.array):
+                return b if a is None else a + b
+            return b
+
+        accum_grads = grads if accum_grads is None else add_to(accum_grads, grads)
+
+    def scale(g, s):
+        if isinstance(g, dict):
+            return {k: scale(v, s) for k, v in g.items()}
+        if isinstance(g, list):
+            return [scale(v, s) for v in g]
+        if isinstance(g, mx.array):
+            return g * s
+        return g
+
+    accum_grads = scale(accum_grads, 1.0 / n)
+    norm = _global_grad_norm(accum_grads)
+    accum_grads = _clip_grads(accum_grads, grad_clip, norm)
+    optimizer.update(model, accum_grads)
+    mx.eval(model.parameters(), optimizer.state)
+    return (total_loss / n).item()

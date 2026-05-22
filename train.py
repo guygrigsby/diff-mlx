@@ -111,10 +111,17 @@ def train_run(
         )
         optimizer.learning_rate = lr
 
-        x_np, y_np = sample_batch(train_loader, model_cfg.block_size, train_cfg.micro_batch, rng)
-        x = mx.array(x_np)
-        y = mx.array(y_np)
-        loss = train_step(model, optimizer, x, y, grad_clip=train_cfg.grad_clip)
+        if train_cfg.grad_accum <= 1:
+            x_np, y_np = sample_batch(train_loader, model_cfg.block_size, train_cfg.micro_batch, rng)
+            x = mx.array(x_np); y = mx.array(y_np)
+            loss = train_step(model, optimizer, x, y, grad_clip=train_cfg.grad_clip)
+        else:
+            from train_step import train_step_with_accum
+            batches = []
+            for _ in range(train_cfg.grad_accum):
+                x_np, y_np = sample_batch(train_loader, model_cfg.block_size, train_cfg.micro_batch, rng)
+                batches.append((mx.array(x_np), mx.array(y_np)))
+            loss = train_step_with_accum(model, optimizer, batches, grad_clip=train_cfg.grad_clip)
 
         do_full_eval = (step > 0 and step % train_cfg.full_eval_every == 0)
         do_monitor_eval = (step > 0 and step % train_cfg.eval_every == 0)
