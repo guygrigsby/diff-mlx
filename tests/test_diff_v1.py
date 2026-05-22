@@ -39,7 +39,7 @@ def _set_param(params, path, value):
 # ---------- v1 vs v0 ----------
 
 V0_V1_SHAPES = [
-    # (label,                B,  H_v, qk_head_dim) — DiffAttention takes n_heads_vanilla
+    # (label, B, H_v, qk_head_dim). DiffAttention takes n_heads_vanilla
     ("toy",                  (2, 4, 16)),
     ("stage0 vanilla heads", (16, 4, 64)),
     ("stage1 vanilla heads", (32, 12, 64)),
