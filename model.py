@@ -106,10 +106,15 @@ class DiffAttention(nn.Module):
     - lambda = exp(dot(λ_q1, λ_k1)) - exp(dot(λ_q2, λ_k2)) + λ_init  (scalar, per-forward)
     - Output scaled by (1 - λ_init) before o_proj
     - RoPE via mx.fast.rope(traditional=True) on Q1/K1/Q2/K2 independently
-    - SDPA via mx.fast.scaled_dot_product_attention(scale=1/√D, mask="causal")
 
-    v0 forward: two SDPA calls with shared V at width 2D, subtract outputs
-    (design §7.1 linearity rewrite — no T×T map materialization).
+    Two kernel paths for the two SDPA calls (selected by `kernel_version`):
+    - "v0" (default): `mx.fast.scaled_dot_product_attention(..., mask="causal")`.
+    - "v1": custom Metal kernel from `kernels.sdpa_p2`. Same algebra, same
+      causal mask. v1 forward uses the custom kernel; backward goes through
+      `mx.custom_function`'s vjp which delegates to MLX's SDPA autograd.
+
+    Both versions compute (design §7.1 linearity rewrite, no T×T map):
+        out = SDPA(Q1, K1, V) - lambda * SDPA(Q2, K2, V)
     """
     def __init__(
         self,
@@ -120,10 +125,13 @@ class DiffAttention(nn.Module):
         rope_base: float = 10000.0,
         rms_eps: float = 1e-5,
         amp_dtype: "mx.Dtype" = mx.float32,
+        kernel_version: str = "v0",
     ):
         super().__init__()
         assert n_heads_vanilla % 2 == 0, "n_heads_vanilla must be even (paired into diff heads)"
         assert n_heads_vanilla * qk_head_dim == dim, "dim must equal n_heads_vanilla * qk_head_dim"
+        if kernel_version not in ("v0", "v1"):
+            raise ValueError(f"unknown kernel_version {kernel_version!r}; expected 'v0' or 'v1'")
         self.dim = dim
         self.n_heads_vanilla = n_heads_vanilla
         self.n_heads_diff = n_heads_vanilla // 2
@@ -133,6 +141,7 @@ class DiffAttention(nn.Module):
         self.rope_base = rope_base
         self.scale = 1.0 / math.sqrt(qk_head_dim)
         self.lambda_init = lambda_init_for_layer(layer_idx)
+        self.kernel_version = kernel_version
 
         # Projections (all dim → dim, bias=False)
         self.q_proj = LinearAMP(dim, dim, bias=False, amp_dtype=amp_dtype)
@@ -178,8 +187,13 @@ class DiffAttention(nn.Module):
         k1 = mx.fast.rope(k1, dims=D, traditional=True, base=self.rope_base, scale=1.0, offset=0)
         k2 = mx.fast.rope(k2, dims=D, traditional=True, base=self.rope_base, scale=1.0, offset=0)
 
-        out1 = mx.fast.scaled_dot_product_attention(q1, k1, v, scale=self.scale, mask="causal")
-        out2 = mx.fast.scaled_dot_product_attention(q2, k2, v, scale=self.scale, mask="causal")
+        if self.kernel_version == "v1":
+            from kernels.sdpa_p2 import sdpa_p2_with_backward
+            out1 = sdpa_p2_with_backward(q1, k1, v, scale=self.scale)
+            out2 = sdpa_p2_with_backward(q2, k2, v, scale=self.scale)
+        else:
+            out1 = mx.fast.scaled_dot_product_attention(q1, k1, v, scale=self.scale, mask="causal")
+            out2 = mx.fast.scaled_dot_product_attention(q2, k2, v, scale=self.scale, mask="causal")
 
         lam = self._compute_lambda()
         out = out1 - lam.astype(out1.dtype) * out2
@@ -211,6 +225,7 @@ class Block(nn.Module):
         rope_base: float = 10000.0,
         rms_eps: float = 1e-5,
         amp_dtype: "mx.Dtype" = mx.float32,
+        diff_kernel_version: str = "v0",
     ):
         super().__init__()
         assert dim == n_heads_vanilla * qk_head_dim, (
@@ -230,6 +245,7 @@ class Block(nn.Module):
                 rope_base=rope_base,
                 rms_eps=rms_eps,
                 amp_dtype=amp_dtype,
+                kernel_version=diff_kernel_version,
             )
         else:
             raise ValueError(f"unknown variant {variant!r}; expected 'vanilla' or 'diff'")
@@ -250,11 +266,12 @@ class Transformer(nn.Module):
 
     forward(token_ids: (B, T)) -> logits: (B, T, vocab_size)
     """
-    def __init__(self, cfg, variant: str = "vanilla"):
+    def __init__(self, cfg, variant: str = "vanilla", diff_kernel_version: str = "v0"):
         super().__init__()
         from config import resolve_amp_dtype
         self.cfg = cfg
         self.variant = variant
+        self.diff_kernel_version = diff_kernel_version
         self._amp_dtype = resolve_amp_dtype(cfg.amp_dtype)
         self.tok_embed = nn.Embedding(cfg.vocab_size, cfg.dim)
         self.blocks = [
@@ -268,6 +285,7 @@ class Transformer(nn.Module):
                 rope_base=cfg.rope_base,
                 rms_eps=cfg.rms_eps,
                 amp_dtype=self._amp_dtype,
+                diff_kernel_version=diff_kernel_version,
             )
             for i in range(cfg.n_layers)
         ]
