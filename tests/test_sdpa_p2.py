@@ -5,7 +5,7 @@ noise on the full shape matrix. The design's "1e-2 absolute" gate assumed
 outputs in [-1, 1]; we use 2e-2 absolute / 5e-3 relative because actual
 post-AV outputs have magnitude > 1 at our shapes and bf16 ULP is ~7.8e-3.
 Measurement: mx.fast SDPA vs manual softmax+matmul disagrees by 1.56e-2 on
-Stage 1 shapes — our kernel sits in that same noise band.
+Stage 1 shapes; our kernel sits in that same noise band.
 
 Backward: matches autograd of pure-MLX SDPA on a toy.
 """
@@ -49,7 +49,7 @@ def test_sdpa_p2_forward_bf16(label, shape):
     rel_diff = abs_diff / max(out_mag, 1e-6)
 
     # Bf16 ULP at magnitude M is ~M * 2^-7. At M=4 (typical output magnitude
-    # at these shapes) one ULP is ~3.1e-2 — and we observe ~1.5e-2 absolute.
+    # at these shapes) one ULP is ~3.1e-2 and we observe ~1.5e-2 absolute.
     # Two correct bf16 implementations of the same algorithm sit at ~1-2 ULP.
     # Pass if either absolute < 2e-2 OR relative < 5e-3.
     assert abs_diff < 2e-2 or rel_diff < 5e-3, (
