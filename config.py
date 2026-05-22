@@ -84,10 +84,9 @@ class TrainConfig:
 
     @classmethod
     def stage0(cls) -> "TrainConfig":
-        # save_every=2000: ~3 saves over Stage 0's 6,103 total steps.
-        # At ~0.7s/step that's ~23 min between saves; if a crash loses 23
-        # min, the auto-resume picks up cleanly. Smaller numbers waste disk
-        # time on a run that already completes in ~90 min total.
+        # save_every=500: ~12 saves over Stage 0's 6,103 total steps.
+        # At ~0.7s/step that's ~6 min between saves; total run is ~90 min,
+        # so a crash loses at most one short interval.
         return cls(
             peak_lr=6e-4,
             warmup_steps=500,
@@ -96,7 +95,7 @@ class TrainConfig:
             grad_accum=1,
             eval_every=500,
             full_eval_every=2500,
-            save_every=2000,
+            save_every=500,
         )
 
     @classmethod
@@ -106,9 +105,9 @@ class TrainConfig:
         # swap, costing ~14x throughput. See scripts/bench_precision.py for
         # the curve. Effective batch stays 32 microbatches per outer step.
         #
-        # save_every=5000: ~6 saves over Stage 1's ~30,517 total steps.
-        # At ~8s/step that's ~11h between saves; a crash loses at most ~11h
-        # of unattended work, which is acceptable for a ~4-day run.
+        # save_every=1000: ~30 saves over Stage 1's ~30,517 total steps.
+        # At ~8s/outer-step that's ~2.2h between saves; a crash loses at
+        # most ~2h on the ~4-day run.
         return cls(
             peak_lr=4e-4,
             warmup_steps=1000,
@@ -117,7 +116,7 @@ class TrainConfig:
             grad_accum=4,
             eval_every=1000,
             full_eval_every=5000,
-            save_every=5000,
+            save_every=1000,
         )
 
     @classmethod
@@ -125,10 +124,11 @@ class TrainConfig:
         # micro_batch=8 (was 32). Same reason as stage1: B=32 swaps on M5 Max.
         # grad_accum stays 4; effective batch unchanged.
         #
-        # save_every=10000: ~6 saves over Stage 2's ~61,035 total steps.
-        # At Stage 2 each save costs more wall (305M params, ~1.2 GB of
-        # safetensors per write), so saves are even more worth batching.
-        # Crash loses up to ~28h.
+        # save_every=500: ~122 saves over Stage 2's ~61,035 total steps.
+        # At ~16s/outer-step that's ~2.2h between saves; a crash loses at
+        # most ~2h on the ~14-day run. Each save is ~1.2 GB (305M params +
+        # optimizer state); cumulative write at sustained SSD speed is well
+        # under a minute over the whole run.
         return cls(
             peak_lr=3e-4,
             warmup_steps=2000,
@@ -137,5 +137,5 @@ class TrainConfig:
             grad_accum=4,
             eval_every=1000,
             full_eval_every=5000,
-            save_every=10000,
+            save_every=500,
         )
