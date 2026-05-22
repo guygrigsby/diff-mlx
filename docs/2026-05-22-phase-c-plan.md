@@ -1,35 +1,31 @@
-# Phase C plan: custom Metal kernels + reduced Stage 1
+# Phase C plan: custom Metal kernels + Stage 1 paired + Stage 2
 
-**Date:** 2026-05-22
-**Status:** Active. Replaces the Phase D plan after the 2026-05-22 pivot (see `docs/2026-05-22-stage1-pivot-retro.md`).
+**Date:** 2026-05-22 (revised same day after the swap-cliff finding)
+**Status:** Active.
 **Companion specs:** `docs/2026-05-20-diffattn-mlx-reproduction-design.md` §5.1, §5.1b, §7 (kernel design, correctness gates, time-boxes).
+**Context:** This plan was first written under the 2026-05-22 pivot retro (`docs/2026-05-22-stage1-pivot-retro.md`) when Stage 1 looked unreachable. The follow-up swap-cliff finding (`docs/2026-05-22-swap-cliff-and-scope-restore.md`) restored most of the scope. The plan was updated to match.
 
 ## Goal
 
-Build P1 (softmax) and P2 (causal SDPA) Metal kernels via MLX's custom-kernel layer. Compose into a v1 diff-attn forward (two P2 calls + Python subtract, per design §7.1). Verify correctness against the existing PyTorch reference fixture. Eval speed against `mx.fast.scaled_dot_product_attention`. Run a reduced Stage 1 paired (200M tokens) using the resulting stack to extend the paired δ result to the larger model.
+Build P1 (softmax) and P2 (causal SDPA) Metal kernels via MLX's custom-kernel layer. Compose into a v1 diff-attn forward (two P2 calls + Python subtract, per design §7.1). Verify correctness against the existing PyTorch reference fixture. Eval speed against `mx.fast.scaled_dot_product_attention`. Run full Stage 1 paired at 2B tokens, and Stage 2 paired single-seed at 4B tokens, with the resulting stack. Multi-seed Stage 2 is optional and budget-dependent.
 
 ## Non-goals
 
-- Full 2B-token Stage 1 or any Stage 2. Descoped (see retro).
+- Stage 2 paired at 4+ seeds. The Phase D multi-seed orchestrator stays as infrastructure but isn't load-bearing for the writeup. 2 seeds at Stage 2 is the realistic ceiling.
 - Fused v2 kernel. Out of scope.
-- Multi-seed studies. Infrastructure stays; not exercised.
 - Beating `mx.fast.scaled_dot_product_attention` on speed. Design §7.5 lists this as a nice-to-have, not gating. Hitting parity is enough.
 
 ## Tasks
 
-### Task 0: `mx.compile` in `train_step`  (~0.5 day)
+### Task 0: throughput-enabling work (DONE)
 
-**Why:** Measured 1.41× speedup at B=4 (`scripts/bench_compile.py`). Free lever, applies regardless of Phase C outcome.
+This task captures three commits landed earlier today that together restored Stage 1/2 feasibility. Listed here for the record; no work remaining.
 
-**Files:** `train_step.py`, `tests/test_train_step.py`.
+- `13d34c7` (`train: wrap train_step in mx.compile`): `CompiledTrainStep` class; 1.41× measured at B=4.
+- `8148f2f` (`fix: stage1/2 micro_batch=8 grad_accum=4 + eval-between-microbatches`): config change to keep working set under the 128 GB unified-memory cliff; `mx.eval` inside accum loop so memory stays at one-microbatch footprint.
+- `b02d1f5` (`train: compile the grad_accum path too`): `CompiledTrainStep.step_with_accum`. Stage 1/2 now get the compile speedup; previously only `grad_accum=1` (Stage 0) did.
 
-**Plan:**
-1. Switch `train_step` to use the canonical MLX compile idiom: `state = [model.state, optimizer.state]`, `mx.compile(inner_step, inputs=state, outputs=state)`.
-2. The grad-norm walk and grad-clip can't easily live inside compile (pytree traversal not traceable); keep them outside the compiled core, fold them into the outer wrapper.
-3. Add a test that verifies bit-close agreement between compiled and uncompiled `train_step` on a Stage 0-sized config after one step.
-4. Update `train_step_with_accum` similarly.
-
-**Acceptance:** existing 102 tests still pass. Stage 0 paired run completes with the same loss curve as before within 1e-4.
+Net: Stage 1 vanilla throughput from ~950 tps (swap-thrashing live run) to ~14,000 tps. Full bench/finding writeup in `docs/2026-05-22-swap-cliff-and-scope-restore.md`.
 
 ### Task 1: P1 softmax kernel  (~1-3 days)
 
@@ -101,57 +97,69 @@ Build P1 (softmax) and P2 (causal SDPA) Metal kernels via MLX's custom-kernel la
 
 This is the empirical answer to "did the kernels actually help." If v1 is meaningfully faster than v0, use v1 for the reduced Stage 1 run. If not, run on v0.
 
-### Task 5: reduced Stage 1 paired (~2 days unattended)
+### Task 5: Stage 1 paired (~4 days unattended)
 
 **Files:**
 - Reuse: `scripts/stage1_paired.py`, `scripts/stage1_paired.sh` (already built).
-- Possibly modify: `scripts/stage1_paired.py` to default `total_tokens=200_000_000` and accept a `--kernel_version` flag.
+- Possibly modify: `scripts/stage1_paired.py` to accept a `--kernel_version` flag if v1 is ready.
 
 **Plan:**
-1. Override `total_tokens` to 200M (from the 2B Stage 1 default).
-2. Run vanilla + diff at one seed under caffeinate, with `mx.compile` enabled and `kernel_version="v1"` if Task 4 showed v1 faster (else v0).
-3. Auto-resume catches a crash; we already have the infra.
-4. Compare paired δ trajectory to Stage 0's. Expect monotonic post-crossover δ in the diff favor, larger absolute gap than Stage 0 if the paper's scaling claim holds at this scale.
+1. Run vanilla + diff at one seed at the design's 2B-token Stage 1 budget under caffeinate. Use `kernel_version="v1"` if Task 4 showed v1 faster (else v0).
+2. Auto-resume catches a crash; infra already in place.
+3. Can be kicked off in the background while Task 1-4 (kernels) continues in the foreground. The training is GPU-bound; kernel-dev work that doesn't itself use the GPU heavily can proceed in parallel.
+4. Compare paired δ trajectory to Stage 0's. Expect monotonic post-crossover δ in the diff favor, larger absolute gap than Stage 0 if the paper's scaling claim holds.
 5. Update Stage 1 NOTES with results.
 
 **Acceptance:** clean run (no NaN), paired δ qualitatively in the diff variant's favor by end of run.
 
-### Task 6: writeup  (~0.5-1 day)
+### Task 6: Stage 2 paired single-seed (~14 days unattended)
+
+**Optional but high-value.** Demonstrates δ at the design's largest model (305M params).
+
+**Plan:**
+1. After Stage 1 lands, kick off Stage 2 paired at one seed. ~14 days unattended.
+2. Same caffeinate + auto-resume pattern.
+3. Use v1 kernels if available.
+
+**Acceptance:** clean run, paired δ recorded.
+
+### Task 7: writeup (~1 day)
 
 **Files:**
 - Create: `docs/2026-05-22-final-writeup.md`.
 
 **Plan:**
-1. What was built (MLX impl, Metal kernels, paired-init protocol, reduced Stage 1 result).
+1. What was built (MLX impl, Metal kernels, paired-init protocol, throughput investigation, Stage 0/1/2 paired δ results).
 2. Cross-check evidence (PyTorch reference fixture, v0/v1 numerical agreement).
 3. Kernel speed numbers.
-4. Stage 0 + reduced Stage 1 paired δ curves.
-5. What this contributes that the paper doesn't.
+4. The swap-cliff finding and what it taught about Apple Silicon training.
+5. Stage 0 + Stage 1 + (optional) Stage 2 paired δ curves.
+6. What this contributes that the paper doesn't.
 
 ## Total time estimate
 
-| Task | Days |
-|---|---|
-| 0: mx.compile | 0.5 |
-| 1: P1 softmax | 1-3 |
-| 2: P2 SDPA | 2-4 |
-| 3: v1 composition | 1-2 |
-| 4: kernel speed eval | 1 |
-| 5: reduced Stage 1 (unattended) | 2 |
-| 6: writeup | 0.5-1 |
-| **Total** | **~8-14 days** |
-
-Wall could be shorter if Task 5 overlaps with Task 6.
+| Task | Days | Notes |
+|---|---|---|
+| 0: throughput work (done) | 0 | landed 2026-05-22 |
+| 1: P1 softmax | 1-3 | foreground |
+| 2: P2 SDPA | 2-4 | foreground |
+| 3: v1 composition | 1-2 | foreground |
+| 4: kernel speed eval | 1 | foreground |
+| 5: Stage 1 paired (unattended) | 4 | parallel with 1-4 |
+| 6: Stage 2 paired single-seed (optional, unattended) | 14 | parallel with 7 |
+| 7: writeup | 1 | sequential |
+| **Total foreground wall** | **~6-11 days** | Stage 1 finishes during the kernel work |
+| **Total incl. Stage 2** | **~20-25 days** | Mostly unattended waiting |
 
 ## Risks
 
-- **P1 stalls** (1-3 day timebox). If MLX's custom-kernel layer turns out to be miserable to work with on M5, design §5.1 says drop v1/v2. Then Phase C ships as a partial deliverable (no kernel, but the reduced Stage 1 result with mx.compile still goes through). Project still has a coherent story.
-- **P2 forward correctness fails at Stage 1 shapes**. v1 ships as a correctness artifact only; reduced Stage 1 runs on v0. mx.compile alone gives ~1.4×; reduced Stage 1 still completes in ~5 days unattended at that throughput.
-- **v1 is slower than v0**. Per design §7.5 we don't need to beat `mx.fast.scaled_dot_product_attention`; just match it on bf16. If v1 ends up materially slower, use v0 for the Stage 1 run and document v1 as a correctness-only artifact.
+- **P1 stalls** (1-3 day timebox). If MLX's custom-kernel layer turns out to be miserable on M5, design §5.1 says drop v1/v2. Project still has a coherent story: MLX impl, throughput investigation, Stage 0 + Stage 1 + (maybe) Stage 2 paired δ, all on v0.
+- **P2 forward correctness fails at Stage 1 shapes.** v1 ships as a correctness artifact only; Stage 1/2 runs use v0.
+- **v1 slower than v0.** Per design §7.5 don't need to beat `mx.fast.scaled_dot_product_attention`. If v1 ends up materially slower, use v0 for the runs and document v1 as correctness-only.
+- **Stage 1 paired run derails.** Auto-resume catches crashes; the 4-day unattended cost is amortized across a few resumes if needed. The smoke at 50 steps already showed clean loss descent.
 
-## Out of scope (descoped from earlier plans)
+## Out of scope
 
-- Full 2B Stage 1, all Stage 2 work.
-- Multi-seed orchestration runs.
+- Stage 2 multi-seed at 4+ seeds (the design's most ambitious column). Two seeds at Stage 2 is the budget ceiling.
 - Fused v2 kernel.
-- Cloud rental (optional H100 cross-check stays as a deferred nice-to-have at ~$15 if budget appears later).
+- Cloud rental (deferred nice-to-have at ~$15 if budget appears later).
