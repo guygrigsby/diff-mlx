@@ -56,6 +56,48 @@ class CompiledTrainStep:
         mx.eval(self.model.parameters(), self.optimizer.state)
         return loss.item()
 
+    def step_with_accum(self, batches, grad_clip: float = 1.0) -> float:
+        """Compiled forward+backward, gradient accumulation across micro-batches,
+        one optimizer step. Same semantics as train_step_with_accum but uses the
+        compiled lg from this instance.
+        """
+        n = len(batches)
+        assert n >= 1
+        accum_grads = None
+        total_loss = mx.zeros(())
+        for x, y in batches:
+            loss, grads = self._compiled_lg(x, y)
+            total_loss = total_loss + loss
+
+            def add_to(a, b):
+                if isinstance(b, dict):
+                    return {k: add_to(a[k] if a is not None else None, b[k]) for k in b}
+                if isinstance(b, list):
+                    return [add_to(a[i] if a is not None else None, b[i]) for i in range(len(b))]
+                if isinstance(b, mx.array):
+                    return b if a is None else a + b
+                return b
+
+            accum_grads = grads if accum_grads is None else add_to(accum_grads, grads)
+            # Force this micro-batch's compute to complete before starting the next.
+            mx.eval(accum_grads, total_loss)
+
+        def scale(g, s):
+            if isinstance(g, dict):
+                return {k: scale(v, s) for k, v in g.items()}
+            if isinstance(g, list):
+                return [scale(v, s) for v in g]
+            if isinstance(g, mx.array):
+                return g * s
+            return g
+
+        accum_grads = scale(accum_grads, 1.0 / n)
+        norm = _global_grad_norm(accum_grads)
+        accum_grads = _clip_grads(accum_grads, grad_clip, norm)
+        self.optimizer.update(self.model, accum_grads)
+        mx.eval(self.model.parameters(), self.optimizer.state)
+        return (total_loss / n).item()
+
 
 def compute_loss_and_grads(model: nn.Module, x: mx.array, y: mx.array):
     """Returns (loss, grads_pytree)."""

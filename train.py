@@ -105,10 +105,9 @@ def train_run(
 
     # Build the compiled step once; reusing the same object every iteration is
     # what makes mx.compile pay off (rebuilding per call throws the graph away).
-    # Only applies to the non-accum path; train_step_with_accum is left
-    # uncompiled for now (grad_accum=1 for Stage 0/1, so this path doesn't fire
-    # in practice; TODO: compile accum path in a follow-up).
-    compiled_step = CompiledTrainStep(model, optimizer) if train_cfg.grad_accum <= 1 else None
+    # Both the single-step path (grad_accum=1) and the accum path (grad_accum>1)
+    # now use the compiled forward+backward via CompiledTrainStep.
+    compiled_step = CompiledTrainStep(model, optimizer)
 
     t0 = time.time()
     step = start_step
@@ -124,12 +123,11 @@ def train_run(
             x = mx.array(x_np); y = mx.array(y_np)
             loss = compiled_step.step(x, y, grad_clip=train_cfg.grad_clip)
         else:
-            from train_step import train_step_with_accum
             batches = []
             for _ in range(train_cfg.grad_accum):
                 x_np, y_np = sample_batch(train_loader, model_cfg.block_size, train_cfg.micro_batch, rng)
                 batches.append((mx.array(x_np), mx.array(y_np)))
-            loss = train_step_with_accum(model, optimizer, batches, grad_clip=train_cfg.grad_clip)
+            loss = compiled_step.step_with_accum(batches, grad_clip=train_cfg.grad_clip)
 
         do_full_eval = (step > 0 and step % train_cfg.full_eval_every == 0)
         do_monitor_eval = (step > 0 and step % train_cfg.eval_every == 0)

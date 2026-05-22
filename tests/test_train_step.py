@@ -98,6 +98,64 @@ def test_grad_accum_matches_full_batch():
     assert diff < 1e-4, f"grad accum diverged from full-batch: max |Δ| = {diff:.3e}"
 
 
+def test_compiled_step_with_accum_matches_uncompiled():
+    """CompiledTrainStep.step_with_accum should produce bit-close params to the
+    uncompiled train_step_with_accum on the same inputs and seed."""
+    import mlx.nn as nn
+    from config import ModelConfig
+    from model import Transformer
+    from optim import make_adamw
+    from train_step import CompiledTrainStep, train_step_with_accum
+
+    mx.random.seed(0)
+    cfg = ModelConfig(
+        dim=32, n_layers=2, n_heads_vanilla=4, qk_head_dim=8,
+        vocab_size=128, mlp_intermediate=64, block_size=16,
+    )
+
+    # Two identically-seeded models.
+    m_ref = Transformer(cfg, variant="vanilla")
+    mx.eval(m_ref.parameters())
+    opt_ref = make_adamw(lr=1e-3, weight_decay=0.0, beta1=0.9, beta2=0.95, eps=1e-8)
+
+    mx.random.seed(0)
+    m_c = Transformer(cfg, variant="vanilla")
+    mx.eval(m_c.parameters())
+    opt_c = make_adamw(lr=1e-3, weight_decay=0.0, beta1=0.9, beta2=0.95, eps=1e-8)
+
+    batches = [
+        (mx.random.randint(0, 128, shape=(2, 16)), mx.random.randint(0, 128, shape=(2, 16))),
+        (mx.random.randint(0, 128, shape=(2, 16)), mx.random.randint(0, 128, shape=(2, 16))),
+    ]
+
+    # Reference: uncompiled
+    train_step_with_accum(m_ref, opt_ref, batches, grad_clip=1.0)
+
+    # Compiled
+    compiled = CompiledTrainStep(m_c, opt_c)
+    compiled.step_with_accum(batches, grad_clip=1.0)
+
+    def first_leaf(p):
+        if isinstance(p, dict):
+            for v in p.values():
+                r = first_leaf(v)
+                if r is not None:
+                    return r
+        elif isinstance(p, list):
+            for v in p:
+                r = first_leaf(v)
+                if r is not None:
+                    return r
+        elif isinstance(p, mx.array):
+            return p
+        return None
+
+    p_ref = first_leaf(m_ref.parameters())
+    p_c = first_leaf(m_c.parameters())
+    diff = float(mx.max(mx.abs(p_ref - p_c)).item())
+    assert diff < 1e-5, f"compiled accum diverged from uncompiled: max |Δ| = {diff:.3e}"
+
+
 def test_compiled_train_step_bit_close_to_uncompiled():
     """CompiledTrainStep.step must agree bit-for-bit with train_step after one update.
 
