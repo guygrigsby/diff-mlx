@@ -12,6 +12,51 @@ def _ce_loss(model: nn.Module, x: mx.array, y: mx.array) -> mx.array:
     return -gathered.mean()
 
 
+class CompiledTrainStep:
+    """Wraps a model + optimizer with a compiled forward+backward closure.
+
+    The forward+backward (loss + grads) is compiled once at construction via
+    ``mx.compile`` with ``inputs=state, outputs=state`` so MLX can fuse kernel
+    dispatch across the computation graph.  The grad-norm walk and grad-clip
+    cannot live inside the compiled boundary (pytree traversal is not MLX-
+    traceable), so they run in the outer wrapper after the compiled call returns.
+    Likewise ``optimizer.update`` runs outside.
+
+    Construct ONCE per training session.  Re-constructing per step rebuilds
+    the graph and eliminates the speedup.
+
+    Usage::
+
+        compiled_step = CompiledTrainStep(model, optimizer)
+        for x, y in batches:
+            loss = compiled_step.step(x, y, grad_clip=1.0)
+    """
+
+    def __init__(self, model: nn.Module, optimizer) -> None:
+        self.model = model
+        self.optimizer = optimizer
+
+        # Capture state lists for compile so MLX knows which arrays to treat
+        # as mutable in/out state across calls.
+        state = [model.state, optimizer.state]
+
+        _lg = nn.value_and_grad(model, _ce_loss)
+
+        def _inner(x: mx.array, y: mx.array):
+            return _lg(model, x, y)
+
+        self._compiled_lg = mx.compile(_inner, inputs=state, outputs=state)
+
+    def step(self, x: mx.array, y: mx.array, grad_clip: float = 1.0) -> float:
+        """Run one compiled optimizer step. Returns scalar loss as Python float."""
+        loss, grads = self._compiled_lg(x, y)
+        norm = _global_grad_norm(grads)
+        grads = _clip_grads(grads, grad_clip, norm)
+        self.optimizer.update(self.model, grads)
+        mx.eval(self.model.parameters(), self.optimizer.state)
+        return loss.item()
+
+
 def compute_loss_and_grads(model: nn.Module, x: mx.array, y: mx.array):
     """Returns (loss, grads_pytree)."""
     loss_and_grad = nn.value_and_grad(model, _ce_loss)

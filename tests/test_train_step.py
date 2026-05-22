@@ -1,7 +1,8 @@
 import numpy as np
 import mlx.core as mx
+import mlx.utils as mlx_utils
 import mlx.optimizers as optim
-from train_step import compute_loss_and_grads, train_step
+from train_step import compute_loss_and_grads, train_step, CompiledTrainStep
 from model import Transformer
 from config import ModelConfig
 
@@ -95,3 +96,49 @@ def test_grad_accum_matches_full_batch():
     p_acc = first_leaf(m_acc.parameters())
     diff = float(mx.max(mx.abs(p_ref - p_acc)).item())
     assert diff < 1e-4, f"grad accum diverged from full-batch: max |Δ| = {diff:.3e}"
+
+
+def test_compiled_train_step_bit_close_to_uncompiled():
+    """CompiledTrainStep.step must agree bit-for-bit with train_step after one update.
+
+    Verifies that mx.compile over the forward+backward does not change the
+    numerical result (compile may fuse ops but should not alter values).
+    """
+    from optim import make_adamw
+
+    def _build():
+        mx.random.seed(99)
+        cfg = ModelConfig(
+            dim=32, n_layers=2, n_heads_vanilla=2, qk_head_dim=16,
+            vocab_size=100_277, mlp_intermediate=64, block_size=32,
+        )
+        model = Transformer(cfg, variant="vanilla")
+        mx.eval(model.parameters())
+        opt = make_adamw(lr=1e-3, weight_decay=0.0, beta1=0.9, beta2=0.95, eps=1e-8)
+        return model, opt
+
+    rng = np.random.default_rng(5)
+    x = mx.array(rng.integers(0, 100_277, size=(2, 32), dtype=np.int32))
+    y = mx.array(rng.integers(0, 100_277, size=(2, 32), dtype=np.int32))
+
+    # Reference: uncompiled train_step
+    m_ref, opt_ref = _build()
+    loss_ref = train_step(m_ref, opt_ref, x, y, grad_clip=1.0)
+
+    # Compiled: CompiledTrainStep
+    m_cmp, opt_cmp = _build()
+    compiled_step = CompiledTrainStep(m_cmp, opt_cmp)
+    loss_cmp = compiled_step.step(x, y, grad_clip=1.0)
+
+    assert abs(loss_ref - loss_cmp) < 1e-5, (
+        f"loss mismatch: uncompiled={loss_ref:.6f} compiled={loss_cmp:.6f}"
+    )
+
+    flat_ref = [v for _, v in mlx_utils.tree_flatten(m_ref.parameters())]
+    flat_cmp = [v for _, v in mlx_utils.tree_flatten(m_cmp.parameters())]
+    max_diff = max(
+        float(mx.max(mx.abs(p1 - p2)).item()) for p1, p2 in zip(flat_ref, flat_cmp)
+    )
+    assert max_diff < 1e-5, (
+        f"compiled param update diverged from uncompiled: max |Δ| = {max_diff:.2e}"
+    )

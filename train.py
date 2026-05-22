@@ -12,7 +12,7 @@ import mlx.core as mx
 from config import ModelConfig, TrainConfig
 from model import Transformer
 from data.loader import ShardLoader, sample_batch
-from train_step import train_step
+from train_step import train_step, CompiledTrainStep
 from eval import compute_val_loss
 from schedule import cosine_lr_with_warmup
 from optim import make_adamw
@@ -102,6 +102,14 @@ def train_run(
           f"{train_cfg.total_tokens / 1e6:.1f}M total tokens")
 
     logger = MetricsLogger(run_dir / "metrics.jsonl")
+
+    # Build the compiled step once; reusing the same object every iteration is
+    # what makes mx.compile pay off (rebuilding per call throws the graph away).
+    # Only applies to the non-accum path; train_step_with_accum is left
+    # uncompiled for now (grad_accum=1 for Stage 0/1, so this path doesn't fire
+    # in practice; TODO: compile accum path in a follow-up).
+    compiled_step = CompiledTrainStep(model, optimizer) if train_cfg.grad_accum <= 1 else None
+
     t0 = time.time()
     step = start_step
     while step < total_steps:
@@ -114,7 +122,7 @@ def train_run(
         if train_cfg.grad_accum <= 1:
             x_np, y_np = sample_batch(train_loader, model_cfg.block_size, train_cfg.micro_batch, rng)
             x = mx.array(x_np); y = mx.array(y_np)
-            loss = train_step(model, optimizer, x, y, grad_clip=train_cfg.grad_clip)
+            loss = compiled_step.step(x, y, grad_clip=train_cfg.grad_clip)
         else:
             from train_step import train_step_with_accum
             batches = []
