@@ -61,9 +61,15 @@ class TrainConfig:
 
     @classmethod
     def stage0(cls) -> "TrainConfig":
+        # micro_batch=4 grad_accum=4 (was 16/1 on MLX side). Effective batch
+        # unchanged at 16. At B=16 on CUDA, the cross-entropy backward
+        # materializes a fp32 (B, T, vocab) grad_logits tensor: 16 * 1024 *
+        # 100277 * 4 bytes = 6.6 GB. Plus saved bf16 logits + other state, the
+        # 8 GB RTX 3070 Ti OOMs. At B=4, grad_logits is 1.6 GB and the run
+        # fits with headroom.
         return cls(
             peak_lr=6e-4, warmup_steps=500, total_tokens=100_000_000,
-            micro_batch=16, grad_accum=1,
+            micro_batch=4, grad_accum=4,
             eval_every=500, full_eval_every=2500, save_every=500,
         )
 
