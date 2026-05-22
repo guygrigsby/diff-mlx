@@ -61,15 +61,17 @@ class TrainConfig:
 
     @classmethod
     def stage0(cls) -> "TrainConfig":
-        # micro_batch=4 grad_accum=4 (was 16/1 on MLX side). Effective batch
-        # unchanged at 16. At B=16 on CUDA, the cross-entropy backward
-        # materializes a fp32 (B, T, vocab) grad_logits tensor: 16 * 1024 *
-        # 100277 * 4 bytes = 6.6 GB. Plus saved bf16 logits + other state, the
-        # 8 GB RTX 3070 Ti OOMs. At B=4, grad_logits is 1.6 GB and the run
-        # fits with headroom.
+        # micro_batch=2 grad_accum=8 (was 16/1 on MLX side). Effective batch
+        # unchanged at 16. At B=4 the working set was ~7.6 GB on an 8 GB
+        # 3070 Ti, leaving no headroom for the Windows display compositor
+        # (DWM shares the same GPU on a single-GPU box). At B=2, grad_logits
+        # is 800 MB and total VRAM at peak ~3-4 GB; desktop stays responsive.
+        #
+        # Pair with PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True for
+        # tighter allocator fragmentation behavior.
         return cls(
             peak_lr=6e-4, warmup_steps=500, total_tokens=100_000_000,
-            micro_batch=4, grad_accum=4,
+            micro_batch=2, grad_accum=8,
             eval_every=500, full_eval_every=2500, save_every=500,
         )
 
