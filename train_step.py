@@ -114,6 +114,10 @@ def train_step_with_accum(model: nn.Module, optimizer, batches,
     """Accumulate gradients over a sequence of (x, y) micro-batches, then
     apply one optimizer step on the averaged grads.
 
+    mx.eval is called after each micro-batch's accumulation so the lazy graph
+    doesn't hold activations from all N micro-batches in memory at once.
+    Without this, peak memory scales with N and Stage 1 swaps to disk.
+
     Returns the mean loss across the micro-batches as a Python float.
     """
     n = len(batches)
@@ -135,6 +139,9 @@ def train_step_with_accum(model: nn.Module, optimizer, batches,
             return b
 
         accum_grads = grads if accum_grads is None else add_to(accum_grads, grads)
+        # Force this micro-batch's compute to complete before starting the next.
+        # Keeps peak memory at one-microbatch footprint instead of N.
+        mx.eval(accum_grads, total_loss)
 
     def scale(g, s):
         if isinstance(g, dict):

@@ -96,23 +96,29 @@ class TrainConfig:
 
     @classmethod
     def stage1(cls) -> "TrainConfig":
+        # micro_batch=8 + grad_accum=4 (was 32 + 1). At B=32 the working set
+        # exceeded M5 Max's 128 GB unified memory and the live run paged into
+        # swap, costing ~14x throughput. See scripts/bench_precision.py for
+        # the curve. Effective batch stays 32 microbatches per outer step.
         return cls(
             peak_lr=4e-4,
             warmup_steps=1000,
             total_tokens=2_000_000_000,
-            micro_batch=32,
-            grad_accum=1,
+            micro_batch=8,
+            grad_accum=4,
             eval_every=1000,
             full_eval_every=5000,
         )
 
     @classmethod
     def stage2(cls) -> "TrainConfig":
+        # micro_batch=8 (was 32). Same reason as stage1: B=32 swaps on M5 Max.
+        # grad_accum stays 4; effective batch unchanged.
         return cls(
             peak_lr=3e-4,
             warmup_steps=2000,
             total_tokens=4_000_000_000,
-            micro_batch=32,
+            micro_batch=8,
             grad_accum=4,
             eval_every=1000,
             full_eval_every=5000,
