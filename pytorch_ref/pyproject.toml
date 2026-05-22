@@ -1,0 +1,31 @@
+[project]
+name = "diff-mlx-pytorch-ref"
+version = "0.1.0"
+description = "PyTorch port of the MLX Differential Transformer for cross-stack validation. Runs on CUDA (RTX 3070 Ti on the dev box; any sm_75+ GPU should work)."
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.4",
+    "numpy>=1.26",
+    "tiktoken>=0.7",
+    "safetensors>=0.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.uv]
+# CUDA-enabled torch wheels live on PyTorch's index, not PyPI. Pick one matching
+# your CUDA driver. cu124 works on driver 550+; cu121 works on 525+.
+# RTX 3070 Ti (Ampere, sm_86) supports both.
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
