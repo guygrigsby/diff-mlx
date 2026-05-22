@@ -85,8 +85,8 @@ def load_paired_init(cfg: ModelConfig, in_dir: Path) -> tuple[Transformer, Trans
     in_dir = Path(in_dir)
     vanilla = Transformer(cfg, variant="vanilla")
     diff = Transformer(cfg, variant="diff")
-    v_params, _ = load_checkpoint(in_dir / "vanilla.safetensors")
-    d_params, _ = load_checkpoint(in_dir / "diff.safetensors")
+    v_params, _, _vopt = load_checkpoint(in_dir / "vanilla.safetensors")
+    d_params, _, _dopt = load_checkpoint(in_dir / "diff.safetensors")
     vanilla.update(v_params)
     diff.update(d_params)
     return vanilla, diff

@@ -55,19 +55,45 @@ def _unflatten(flat: dict) -> dict:
 
 def save_checkpoint(params: dict, step: int, ckpt_path: Path,
                     optim_state=None, rng_state=None) -> None:
-    """Save params (and optionally optimizer state / RNG state) to safetensors."""
-    flat = _flatten(params)
-    metadata = {"step": str(step)}
-    mx.save_safetensors(str(ckpt_path), flat, metadata=metadata)
+    """Save params + optional optimizer state to a single safetensors file.
+
+    Keys are namespaced: `model.<path>` for params, `opt.<path>` for optimizer
+    state. Step is recorded in safetensors metadata. rng_state is currently
+    accepted but not yet persisted (left as a future hook).
+    """
+    flat_model = {f"model.{k}": v for k, v in _flatten(params).items()}
+    bundle = dict(flat_model)
+    if optim_state is not None:
+        flat_opt = {f"opt.{k}": v for k, v in _flatten(optim_state).items()
+                    if isinstance(v, mx.array)}
+        bundle.update(flat_opt)
+    metadata = {"step": str(step), "has_opt": "1" if optim_state is not None else "0"}
+    mx.save_safetensors(str(ckpt_path), bundle, metadata=metadata)
 
 
-def load_checkpoint(ckpt_path: Path) -> tuple[dict, int]:
-    """Load a safetensors checkpoint. Returns (params_dict, step)."""
+def load_checkpoint(ckpt_path: Path) -> tuple[dict, int, dict | None]:
+    """Load a checkpoint. Returns (params, step, optim_state-or-None).
+
+    Splits the namespaced keys back into the two pytrees. An older checkpoint
+    without optimizer state returns None for the third element.
+    """
     loaded = mx.load(str(ckpt_path), return_metadata=True)
     tensors, metadata = loaded
     step = int(metadata.get("step", "0"))
-    params = _unflatten(dict(tensors))
-    return params, step
+    has_opt = metadata.get("has_opt", "0") == "1"
+
+    model_flat = {k[len("model."):]: v for k, v in tensors.items() if k.startswith("model.")}
+    if not model_flat:
+        # legacy checkpoint: no namespace prefix
+        model_flat = dict(tensors)
+    params = _unflatten(model_flat)
+
+    optim_state: dict | None = None
+    if has_opt:
+        opt_flat = {k[len("opt."):]: v for k, v in tensors.items() if k.startswith("opt.")}
+        optim_state = _unflatten(opt_flat) if opt_flat else None
+
+    return params, step, optim_state
 
 
 def save_run_metadata(
