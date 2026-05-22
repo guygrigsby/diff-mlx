@@ -74,6 +74,18 @@ def train_run(
         eps=train_cfg.adam_eps,
     )
 
+    # Resume from latest.safetensors if present.
+    latest_ckpt = run_dir / "latest.safetensors"
+    start_step = 0
+    if latest_ckpt.exists() and latest_ckpt.stat().st_size > 0:
+        from checkpoint import load_checkpoint
+        loaded_params, saved_step, loaded_opt_state = load_checkpoint(latest_ckpt)
+        model.update(loaded_params)
+        if loaded_opt_state is not None:
+            optimizer.state = loaded_opt_state
+        start_step = saved_step + 1
+        print(f"[train] resuming from step {saved_step + 1} ({latest_ckpt})")
+
     save_run_metadata(
         run_dir=run_dir, model_cfg=model_cfg,
         train_cfg_dict=asdict(train_cfg),
@@ -91,7 +103,7 @@ def train_run(
 
     logger = MetricsLogger(run_dir / "metrics.jsonl")
     t0 = time.time()
-    step = 0
+    step = start_step
     while step < total_steps:
         lr = cosine_lr_with_warmup(
             step, train_cfg.peak_lr, train_cfg.warmup_steps, total_steps,
@@ -124,7 +136,9 @@ def train_run(
         logger.log(**record)
 
         if (step > 0 and step % train_cfg.save_every == 0) or step == total_steps - 1:
-            save_checkpoint(model.parameters(), step=step, ckpt_path=run_dir / "latest.safetensors")
+            save_checkpoint(model.parameters(), step=step,
+                            ckpt_path=run_dir / "latest.safetensors",
+                            optim_state=optimizer.state)
 
         step += 1
     logger.close()
