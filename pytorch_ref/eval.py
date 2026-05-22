@@ -38,13 +38,17 @@ def compute_val_loss(
         y = torch.from_numpy(y_np).to(device)
         if autocast_dtype is not None and x.is_cuda:
             with torch.autocast(device_type="cuda", dtype=autocast_dtype):
-                logits = model(x).float()
+                logits = model(x)
+                B, T, V = logits.shape
+                loss = F.cross_entropy(
+                    logits.view(B * T, V), y.view(B * T), reduction="sum"
+                ).item()
         else:
-            logits = model(x).float()
-        B, T, V = logits.shape
-        loss = F.cross_entropy(
-            logits.view(B * T, V), y.view(B * T), reduction="sum"
-        ).item()
+            logits = model(x)
+            B, T, V = logits.shape
+            loss = F.cross_entropy(
+                logits.view(B * T, V), y.view(B * T), reduction="sum"
+            ).item()
         total_loss += loss
         total_tokens += B * T
         if offset >= max_tokens:

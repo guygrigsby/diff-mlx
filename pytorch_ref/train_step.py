@@ -10,9 +10,15 @@ import torch.nn.functional as F
 
 
 def _ce_loss(model: nn.Module, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-    """Mean cross-entropy. Logits cast to fp32 (design §9.0)."""
-    logits = model(x).float()
-    # cross_entropy expects (N, C) logits and (N,) targets.
+    """Mean cross-entropy. Design §9.0 mandates fp32 for the softmax + CE.
+
+    Under torch.autocast(bfloat16), F.cross_entropy is already in the
+    always-fp32 op list. Materializing fp32 logits explicitly via .float() is
+    redundant AND doubles the logits-tensor memory cost; at B=16 T=1024 with a
+    100k vocab that's a 6.6 GB tensor that OOMs the 8 GB RTX 3070 Ti. The
+    MLX side casts explicitly because MLX has no autocast; we don't need to.
+    """
+    logits = model(x)
     B, T, V = logits.shape
     return F.cross_entropy(logits.view(B * T, V), y.view(B * T))
 
