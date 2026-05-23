@@ -248,6 +248,12 @@ class Transformer(nn.Module):
         self.cfg = cfg
         self.variant = variant
         self.tok_embed = nn.Embedding(cfg.vocab_size, cfg.dim)
+        # Match MLX nn.Embedding's default init: normal(0, 1/sqrt(dim)).
+        # PyTorch's default is N(0, 1), 16x wider at dim=256, which gives
+        # initial CE loss of ~246 (vs MLX's ~12) and a training trajectory
+        # that never quite recovers. Aligning the init is what makes the
+        # cross-stack delta comparison apples-to-apples.
+        nn.init.normal_(self.tok_embed.weight, mean=0.0, std=1.0 / math.sqrt(cfg.dim))
         self.blocks = nn.ModuleList([
             Block(
                 dim=cfg.dim,
