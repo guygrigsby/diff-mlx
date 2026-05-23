@@ -105,9 +105,11 @@ class TrainConfig:
         # swap, costing ~14x throughput. See scripts/bench_precision.py for
         # the curve. Effective batch stays 32 microbatches per outer step.
         #
-        # save_every=1000: ~30 saves over Stage 1's ~30,517 total steps.
-        # At ~8s/outer-step that's ~2.2h between saves; a crash loses at
-        # most ~2h on the ~4-day run.
+        # save_every=500: ~60 saves over Stage 1's ~30,517 total steps.
+        # At ~7s/outer-step that's ~58 min between saves; a crash loses at
+        # most ~1h on the ~3-day run. Tighter cadence in practice because
+        # the GPU gets kill-restarted occasionally for other work; smaller
+        # save window keeps restart cost manageable.
         return cls(
             peak_lr=4e-4,
             warmup_steps=1000,
@@ -116,7 +118,7 @@ class TrainConfig:
             grad_accum=4,
             eval_every=1000,
             full_eval_every=5000,
-            save_every=1000,
+            save_every=500,
         )
 
     @classmethod
