@@ -6,7 +6,7 @@
 
 **Architecture:** Option A from `docs/2026-05-21-bf16-mixed-precision-design.md`. Add `LinearAMP` (an `nn.Linear` subclass that casts weight/bias to a configured dtype inside `__call__`) and a `amp_dtype` string field on `ModelConfig` plumbed through `Transformer` → `Block` → attention/MLP modules. No changes to optimizer, checkpointing, or loss path; existing fp32 protections (RMSNorm internals, CE logits cast, grad-norm fp32) are already in place.
 
-**Tech Stack:** MLX (`mlx.core`, `mlx.nn`), pytest. Working directory: `/Users/guygrigsby/projects/diff-mlx`. Venv at `.venv/`; activate before running.
+**Tech Stack:** MLX (`mlx.core`, `mlx.nn`), pytest. Working directory: `diff-mlx`. Venv at `.venv/`; activate before running.
 
 **Files touched:**
 - `model.py`: add `LinearAMP`; replace `nn.Linear` use sites in `VanillaMHA`, `DiffAttention`, `SwiGLU`; thread `amp_dtype` through `Block` and `Transformer`; cast `tok_embed` output to `amp_dtype` at start of `Transformer.__call__`.

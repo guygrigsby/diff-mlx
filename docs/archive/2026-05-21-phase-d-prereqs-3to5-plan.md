@@ -9,7 +9,7 @@
 
 **Architecture:** All three are local changes against the existing single-process training loop. No new abstractions, no new dependencies. The bf16 work merged on `main`; the test suite sits at 98/98.
 
-**Tech stack:** MLX (`mlx.core`, `mlx.nn`, `mlx.optimizers`), numpy, pytest, bash. Working dir `/Users/guygrigsby/projects/diff-mlx`. Venv at `.venv/`.
+**Tech stack:** MLX (`mlx.core`, `mlx.nn`, `mlx.optimizers`), numpy, pytest, bash. Working dir `diff-mlx`. Venv at `.venv/`.
 
 **Design notes:**
 - **Optimizer state serialization:** safetensors only stores flat string→array dicts. Use a single safetensors file per checkpoint with two namespaces: keys prefixed `model.` for params and `opt.` for optimizer state. Step + variant + amp_dtype go in the safetensors metadata. RNG state is out of scope for this round (sampling RNG is `numpy.random.default_rng(data_seed)`, deterministic from seed; resume picks up at the next step, advancing the sampler past the consumed positions is a separate problem and not load-bearing for crash-recovery).

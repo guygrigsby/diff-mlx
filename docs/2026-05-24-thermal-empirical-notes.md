@@ -48,6 +48,21 @@ For benchmark fairness: most "MLX on Apple Silicon" throughput numbers in the wi
 - **Does an external cooler stack with forced fans?** Untested but likely yes. Aftermarket clip-on vacuum coolers exist for MacBooks and could push residency above 80%.
 - **Is there a soft-throttle warning before hard throttle?** powermetrics reports `cpu/gpu thermal level`; tracking that against `sec_per_step` over a run would give an early-warning signal. Future investigation.
 
+## Power-delivery throttle (added 2026-05-27, during Stage 1 paired)
+
+A second non-compute throttle, distinct from thermal and arguably more insidious because the temperature stays *low*.
+
+Mid-run, sustained throughput dropped ~10% (sec/step 4.76 → ~5.2) while the chip sat at **73°C**. Low temp ruled out thermal. The cause was power delivery:
+
+- The laptop was charging through a **Thunderbolt dock that also drove a monitor**, and the dock delivers **100W**.
+- macOS selected the dock as the power source **even with the 140W MagSafe brick also plugged in**. The Mac does not sum two power inputs; it arbitrates to one, and the dock won. Replugging the dock did not hand the role to MagSafe.
+- **100W is the USB-C PD ceiling** (20V × 5A). The full 140W requires MagSafe 3 or an EPR-rated (28V) cable. So even a 140W-capable setup negotiates down to 100W over a standard USB-C path.
+- Under full GPU load, the SoC plus charging a depleted battery exceeded 100W, so the system pulled from the battery as a buffer: it **drained while macOS reported "charging"** (net draw > supply). As the battery fell, clocks were shaved further.
+
+**Signature:** cool temps + reduced GPU clocks/utilization + battery discharging while plugged in. **Fix:** fully remove the dock's power input so MagSafe is the only source → re-negotiates to 140W → throughput recovers. **Confirm with** `system_profiler SPPowerDataType | grep Wattage` (should read ~140, not 100).
+
+Practical rule: on a laptop, **a low temperature does not rule out throttling.** If sustained throughput drops and the chip is cool, suspect power delivery before code or thermals. And beware docks: convenient single-cable setups silently cap you at 100W.
+
 ## Related findings (other throughput limits)
 
 - **Swap cliff at the unified-memory budget.** Stage 1 with `micro_batch=32` had peak working set >128 GB, causing OS-level paging and a separate ~14x throughput collapse. Documented in `docs/2026-05-22-swap-cliff-and-scope-restore.md`. Fix was `micro_batch=8 grad_accum=4`, preserving effective batch.
@@ -58,6 +73,7 @@ For benchmark fairness: most "MLX on Apple Silicon" throughput numbers in the wi
 - [x] Stock vs forced fans measured.
 - [x] Open lid vs closed lid measured.
 - [x] Active vs passive cooling measured.
-- [ ] Sustained-period verification: hold 100%-fan setup for 8+ hours, confirm no degradation creeps in.
+- [x] Sustained-period verification: the multi-day Stage 1 paired run held the aggressive-cooling setup for many hours with no thermal degradation once cooling was adequate. Confirmed.
+- [x] Power-delivery throttle identified (dock 100W vs MagSafe 140W), 2026-05-27.
 - [ ] powermetrics thermal-level correlation with sec/step.
 - [ ] If access: same measurement on a Mac Studio for envelope comparison.

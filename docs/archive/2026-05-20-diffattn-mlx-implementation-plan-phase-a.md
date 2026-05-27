@@ -138,7 +138,7 @@ See the design doc for hardware, hypothesis, scope, and stage gates.
 
 Run:
 ```bash
-cd /Users/guygrigsby/projects/diff-mlx
+cd diff-mlx
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"

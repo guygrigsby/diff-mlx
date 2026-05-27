@@ -1,51 +1,68 @@
 # diff-mlx
 
-MLX implementation of the Differential Transformer (Ye et al., ICLR 2025) on Apple Silicon, with custom Metal kernels for the diff-attn forward pass. Correctness validated against the vendored PyTorch reference.
+MLX implementation of the Differential Transformer (Ye et al., ICLR 2025; [arXiv 2410.05258](https://arxiv.org/abs/2410.05258)) on Apple Silicon, with custom Metal kernels for the differential-attention forward pass. A small-scale, controlled, paired-init reproduction of the diff-attn mechanism, cross-validated against the vendored Microsoft PyTorch reference and a second run in PyTorch on NVIDIA CUDA.
 
-## Current direction (as of 2026-05-22, post swap-cliff finding)
+**Status: complete.** Full writeup: [`docs/2026-05-23-final-writeup.md`](docs/2026-05-23-final-writeup.md).
 
-Active scope: MLX implementation + custom Metal kernels (Phase C) + Stage 1 paired (2B tokens, ~4 days unattended) + Stage 2 paired single-seed (4B tokens, ~14 days unattended).
+## Result in one paragraph
 
-Earlier today a pivot retro descoped Stage 1/2 paper-scale runs based on a ~950 tps reading. That reading turned out to be swap-thrashing at `micro_batch=32` (working set over the 128 GB unified-memory ceiling). Dropping to `micro_batch=8 grad_accum=4` plus `mx.eval` between micro-batches plus extending `mx.compile` through the accum path restored throughput to ~14k tps. Most of the descope is reversed. The pivot retro is preserved for history.
+At Stage 0 (30M params, 100M tokens) the paired δ replicated the paper's directional claim, diff beating vanilla by 0.020 nats on held-out val. At Stage 1 (162M params, 2.0B tokens) it did **not**: diff ended 0.11 nats ahead on *train* loss but 0.035 nats *behind* vanilla on held-out val, with a clear overfitting signature. A position-binned eval found vanilla uniformly better across the entire 2048-token window with no widening of diff's deficit at later positions, so the architecture's signature long-context advantage did not appear at this scale either. Net: in this small-scale, short-context, single-seed regime, DiffAttention shows no generalization benefit. This is three orders of magnitude below the paper's 3B-param / 1T-token setup, so it refutes nothing about the paper. It is an honest negative for the small-scale regime.
 
-- **Swap-cliff finding (current state):** `docs/2026-05-22-swap-cliff-and-scope-restore.md`
-- **Pivot retro (historical, partially superseded):** `docs/2026-05-22-stage1-pivot-retro.md`
-- **Active plan:** `docs/2026-05-22-phase-c-plan.md`
-- **Original design (kernel specs still authoritative):** `docs/2026-05-20-diffattn-mlx-reproduction-design.md`
+![Stage 1 diff vs vanilla](docs/stage1_diff_vs_vanilla.png)
 
-## What's already done
+## What's here
 
-- MLX implementation of vanilla MHA + Differential Attention.
-- Cross-check vs vendored PyTorch reference (`tests/test_diff_reference.py`): 3.58e-7 max diff on CPU stream.
-- Paired-seed init protocol (design §9.7).
-- bf16 mixed precision via `LinearAMP`. Design: `docs/2026-05-21-bf16-mixed-precision-design.md`.
-- Optimizer-state checkpoints, auto-resume, grad_accum (with compile), caffeinate wrappers.
-- Stage 0 paired δ: diff beats vanilla by 0.020 nats post-crossover at step 3000.
-- Throughput investigation + fixes: B=8 grad_accum=4 + compiled accum gives ~14k tps Stage 1.
-- 104 tests passing.
+- **MLX implementation** of vanilla MHA + Differential Attention (`model.py`), paper-canonical interleaved head split, RoPE (interleaved), SwiGLU, RMSNorm, tied embeddings.
+- **Custom Metal kernels** via `mx.fast.metal_kernel`: P1 row-wise softmax (`kernels/softmax_p1.py`), P2 causal SDPA (`kernels/sdpa_p2.py`), and a v1 diff composition that swaps them in with `mx.custom_function` autograd hooks.
+- **Paired-init protocol**: byte-identical shared weights between variants so single-seed δ is meaningful.
+- **bf16 mixed precision** via `LinearAMP`; optimizer-state checkpoints, auto-resume, gradient accumulation through a compiled step.
+- **PyTorch cross-stack reference** (`pytorch_ref/`) run on an RTX 3070 Ti to rule out MLX/Metal artifacts.
+- **116 tests** in `tests/` (plus the PyTorch side in `pytorch_ref/tests/`).
 
-## What's next
+## Correctness
 
-Phase C kernels (P1 softmax, P2 causal SDPA, v1 diff composition) in foreground while Stage 1 paired runs in background, then Stage 2 paired single-seed, then writeup. See the plan.
+- Cross-check vs vendored Microsoft reference (`tests/test_diff_reference.py`): **3.58e-7** max diff on CPU stream.
+- P1 softmax: ~3e-8 (fp32) / ~2e-3 (bf16) vs `mx.softmax`.
+- P2 SDPA: within the bf16 ULP-noise band vs `mx.fast.scaled_dot_product_attention`.
 
-## Active docs
+## Model checkpoints
 
-- `docs/2026-05-22-swap-cliff-and-scope-restore.md` (read this first for current state)
-- `docs/2026-05-22-phase-c-plan.md` (active plan)
-- `docs/2026-05-22-stage1-pivot-retro.md` (historical pivot decision, partially walked back)
-- `docs/2026-05-20-diffattn-mlx-reproduction-design.md` (kernel specs in §5.1, §5.1b, §7 are load-bearing)
-- `docs/2026-05-21-bf16-mixed-precision-design.md`
-- `docs/2026-05-20-phase-a-retro.md`, `docs/2026-05-20-phase-b-retro.md` (historical context)
+Both final Stage 1 checkpoints (162M params, 2.0B tokens, seed 0, safetensors) are published on Hugging Face: **[huggingface.co/guygrigsby/diff-mlx](https://huggingface.co/guygrigsby/diff-mlx)** (`diff/` and `vanilla/` subfolders).
 
-## Archive
+## Reproducing
 
-Superseded plans and one-off scripts at `docs/archive/` and `scripts/archive/`. See the README in each for what's there and why.
+```bash
+# env (Apple Silicon, MLX)
+python -m venv .venv && source .venv/bin/activate
+pip install -e .
 
-## Active scripts
+# tests
+pytest -q
 
-- `scripts/stage0_paired.{py,sh}`, `scripts/stage0_vanilla.sh`: Stage 0 paired and vanilla runners.
-- `scripts/stage1_paired.{py,sh}`, `scripts/stage1_smoke.{py,sh}`: Stage 1 runners.
-- `scripts/bench_step.py`, `scripts/bench_compile.py`, `scripts/bench_precision.py`: throughput diagnostics.
-- `scripts/diagnose_throughput.py`: long-form throughput investigation tool.
-- `scripts/generate_ref_fixture.py`: regenerates the PyTorch reference fixture.
-- `scripts/stage0_dryrun.py`, `scripts/stage0_dryrun_with_eval.py`, `scripts/stage0_paired_dryrun.py`: dry-run validators used during Phase A/B.
+# Stage 1 paired run (long; needs prepared shards in data/shards/)
+python scripts/stage1_paired.py --data_seed 0 --model_seed 0 --out_root runs/stage1-paired
+
+# position-binned held-out eval on the final checkpoints
+python scripts/eval_position_binned.py
+```
+
+Data shards and training runs are gitignored (see `.gitignore`); only code, docs, and the small reference fixture are tracked.
+
+## Findings worth reading even if you don't care about diff-attn
+
+- **Apple Silicon throughput is dispatch-bound** at these shapes (~14k tok/s, ~5-10% of bf16 peak). macmon GPU-% is utilization, not throughput.
+- **Swap cliff:** per-token cost is flat then falls off a cliff at the unified-memory budget. `micro_batch=32` thrashed swap and read 14× slow; `micro_batch=8 grad_accum=4` fixed it. See `docs/2026-05-22-swap-cliff-and-scope-restore.md`.
+- **Thermal + power throttling on a laptop chassis:** stock fan curve throttles within ~10 min; aggressive cooling roughly doubles sustained throughput. And a low temperature does *not* rule out throttling: a Thunderbolt dock silently capped charging at 100W (vs the 140W MagSafe), shaving GPU clocks while the chip sat cool at 73°C. See `docs/2026-05-24-thermal-empirical-notes.md`.
+
+## Docs
+
+- `docs/2026-05-23-final-writeup.md` — the full writeup (start here).
+- `docs/2026-05-20-diffattn-mlx-reproduction-design.md` — design; kernel specs in §5.1, §5.1b, §7 are authoritative.
+- `docs/2026-05-24-thermal-empirical-notes.md` — thermal + power throttling on M5 Max.
+- `docs/2026-05-22-swap-cliff-and-scope-restore.md` — the swap-cliff investigation.
+- `docs/2026-05-21-bf16-mixed-precision-design.md` — bf16 design.
+- `docs/archive/` — superseded plans and phase retros, kept for history.
+
+## License
+
+MIT. See `LICENSE`.
