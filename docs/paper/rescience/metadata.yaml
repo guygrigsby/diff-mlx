@@ -5,10 +5,10 @@
 #  - For a successful replication, it should be prefixed with "[Re]"
 #  - For a failed replication, it should be prefixed with "[¬Re]"
 #  - For other article types, no instruction (but please, not too long)
-# NOTE(review): prefix choice is an editor question. This is a partial
-# replication at reduced scale; the mechanism's benefit did not appear in
-# our regime, but the original's regime was not tested.
-title: "Differential Attention at Small Scale: A Paired, Cross-Stack Reproduction with No Generalization Benefit"
+# NOTE(submission): [¬Re] proposed with the scale qualifier in the title
+# doing the bounding; the original's regime was not tested and the abstract
+# says so. Flag for editorial guidance in the submission issue.
+title: "[¬Re] Differential Attention at Small Scale: A Paired, Cross-Stack Reproduction with No Generalization Benefit"
 
 # List of authors with name, orcid number, email and affiliation
 # Affiliation "*" means contact author (required even for single-authored papers)
