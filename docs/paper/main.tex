@@ -24,7 +24,8 @@ The Differential Transformer reports consistent gains over standard
 attention at 3B parameters and 1T tokens. We test whether the mechanism
 helps at the scale a single laptop can reach. We reimplement
 differential attention in MLX on Apple Silicon with custom Metal
-kernels, verify it against the official PyTorch reference at $10^{-7}$ and replicate the training run in PyTorch on NVIDIA CUDA to rule out
+kernels, verify it against the official PyTorch reference at $10^{-7}$ 
+and replicate the training run in PyTorch on NVIDIA CUDA to rule out
 framework artifacts. Every comparison is paired. Both variants start
 from byte-identical shared weights and see identical data order, so a
 single-run delta is meaningful. At 30M parameters and 100M tokens, four
@@ -56,7 +57,7 @@ smaller.
 This paper asks a narrow question. Does differential attention help at
 the scale one machine can reach? The question needs care, because at
 small scale the noise floor is high and a single training run can show
-a win that means nothing. We control for this three ways. Every
+a spurious win. We control for this three ways. Every
 comparison is paired, with both variants starting from byte-identical
 shared weights and consuming identical data order. The implementation
 is verified against the official reference at $10^{-7}$. The headline

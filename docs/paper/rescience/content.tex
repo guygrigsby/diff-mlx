@@ -15,7 +15,7 @@ smaller.
 This paper asks a narrow question. Does differential attention help at
 the scale one machine can reach? The question needs care, because at
 small scale the noise floor is high and a single training run can show
-a win that means nothing. We control for this three ways. Every
+a spurious win. We control for this three ways. Every
 comparison is paired, with both variants starting from byte-identical
 shared weights and consuming identical data order. The implementation
 is verified against the official reference at $10^{-7}$. The headline
