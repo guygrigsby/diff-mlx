@@ -35,11 +35,9 @@ code:
   - swh:
 
 # Data URL and DOI (optional if no data)
-# NOTE: Zenodo evidence deposit pending; checkpoints and training logs are
-# public on Hugging Face today.
 data:
-  - url: https://huggingface.co/guygrigsby/diff-mlx
-  - doi:
+  - url: https://doi.org/10.5281/zenodo.21570478
+  - doi: 10.5281/zenodo.21570478
 
 # Information about the original article that has been replicated
 replication:
