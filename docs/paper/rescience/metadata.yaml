@@ -1,0 +1,129 @@
+# To be filled by the author(s) at the time of submission
+# -------------------------------------------------------
+
+# Title of the article:
+#  - For a successful replication, it should be prefixed with "[Re]"
+#  - For a failed replication, it should be prefixed with "[¬Re]"
+#  - For other article types, no instruction (but please, not too long)
+# NOTE(review): prefix choice is an editor question. This is a partial
+# replication at reduced scale; the mechanism's benefit did not appear in
+# our regime, but the original's regime was not tested.
+title: "Differential Attention at Small Scale: A Paired, Cross-Stack Reproduction with No Generalization Benefit"
+
+# List of authors with name, orcid number, email and affiliation
+# Affiliation "*" means contact author (required even for single-authored papers)
+authors:
+  - name: Guy J. Grigsby
+    orcid:
+    email: guy@aeryx.ai
+    affiliations: 1,*
+
+# List of affiliations with code (corresponding to author affiliations), name
+# and address.
+affiliations:
+  - code:    1
+    name:    Independent researcher
+    address: Denver, Colorado, United States
+
+# List of keywords (adding the programming language might be a good idea)
+keywords: differential transformer, attention, reproduction, MLX, Metal, Apple Silicon, Python
+
+# Code URL and DOI/SWH (url is mandatory for replication, doi after acceptance)
+code:
+  - url: https://github.com/guygrigsby/diff-mlx
+  - doi:
+  - swh:
+
+# Data URL and DOI (optional if no data)
+# NOTE: Zenodo evidence deposit pending; checkpoints and training logs are
+# public on Hugging Face today.
+data:
+  - url: https://huggingface.co/guygrigsby/diff-mlx
+  - doi:
+
+# Information about the original article that has been replicated
+replication:
+ - cite: "Tianzhu Ye, Li Dong, Yuqing Xia, Yutao Sun, Yi Zhu, Gao Huang, Furu Wei. Differential Transformer. ICLR 2025."
+ - bib:  ye2025differential
+ - url:  https://arxiv.org/pdf/2410.05258
+ - doi:  10.48550/arXiv.2410.05258
+
+# Don't forget to surround abstract with double quotes
+# NOTE: numbers here restate generated/summary_macros.tex values; if the
+# evidence regenerates differently, resync this abstract by hand.
+abstract: "The Differential Transformer reports consistent gains over standard
+           attention at 3B parameters and 1T tokens. We test whether the
+           mechanism helps at the scale a single laptop can reach. We
+           reimplement differential attention in MLX on Apple Silicon with
+           custom Metal kernels, verify it against the official PyTorch
+           reference at 1e-7, and replicate the training run in PyTorch on
+           NVIDIA CUDA to rule out framework artifacts. Every comparison is
+           paired. Both variants start from byte-identical shared weights and
+           see identical data order, so a single-run delta is meaningful. At
+           30M parameters and 100M tokens, four rerun seeds put the paired
+           val-loss delta at -0.016 +/- 0.023 nats with a sign flip across
+           seeds, and the originally recorded single-seed win sits inside that
+           band. A single-seed win of the size we first observed is seed
+           noise. At 162M parameters and 2.0B tokens, differential attention
+           wins train loss by -0.111 nats yet loses held-out validation by
+           +0.035 nats, with a late-run overfitting signature. Binning
+           held-out loss by token position shows vanilla uniformly ahead
+           across the whole 2048-token window, so the long-context advantage
+           the mechanism is built for does not appear. These results sit
+           three orders of magnitude below the paper's setting and refute
+           nothing about it. They show no benefit in the small-scale,
+           short-context regime. All code, kernels, training logs, and
+           checkpoints are released."
+
+# Bibliography file (yours)
+bibliography: references.bib
+
+# Type of the article
+# Type can be:
+#  * Editorial
+#  * Letter
+#  * Replication
+type: Replication
+
+# Scientific domain of the article (e.g. Computational Neuroscience)
+domain: Machine Learning
+
+# Coding language (main one only if several)
+language: Python
+
+# To be filled by the author(s) after acceptance
+# -----------------------------------------------------------------------------
+
+# For example, the URL of the GitHub issue where review actually occured
+review:
+  - url:
+
+contributors:
+  - name:
+    orcid:
+    role: editor
+  - name:
+    orcid:
+    role: reviewer
+  - name:
+    orcid:
+    role: reviewer
+
+# This information will be provided by the editor
+dates:
+  - received:
+  - accepted:
+  - published:
+
+# This information will be provided by the editor
+article:
+  - number: # Article number will be automatically assigned during publication
+  - doi:    # DOI from Zenodo
+  - url:    # Final PDF URL (Zenodo or rescience website?)
+
+# This information will be provided by the editor
+journal:
+  - name:   "ReScience C"
+  - issn:   2430-3658
+  - volume:
+  - issue:

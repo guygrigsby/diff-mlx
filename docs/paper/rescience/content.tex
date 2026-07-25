@@ -1,0 +1,259 @@
+% Body of the ReScience C submission. Kept in sync with ../main.tex (the
+% plain-article draft) by hand; the numbers cannot drift because both input
+% the same generated/ files, which the Makefile copies in before building.
+
+\section{Introduction}
+Differential attention computes two softmax attention maps per head and
+subtracts one from the other, scaled by a learned $\lambda$. The
+subtraction cancels common-mode attention noise. The original
+paper\supercite{ye2025differential} reports consistent wins at 3B
+parameters and 1T tokens, with the largest gains on long-context and
+retrieval tasks. Training at that scale requires a cluster. Most
+practitioners who consider adopting the mechanism will first try it far
+smaller.
+
+This paper asks a narrow question. Does differential attention help at
+the scale one machine can reach? The question needs care, because at
+small scale the noise floor is high and a single training run can show
+a win that means nothing. We control for this three ways. Every
+comparison is paired, with both variants starting from byte-identical
+shared weights and consuming identical data order. The implementation
+is verified against the official reference at $10^{-7}$. The headline
+delta is replicated cross-stack, in a different framework on a
+different vendor's silicon.
+
+The answer is no. A paired seed band at 30M parameters shows the
+delta is seed noise. At 162M parameters and 2.0B tokens differential
+attention memorizes the training stream harder and generalizes
+slightly worse, and its held-out loss shows no improvement at any
+token position. The mechanism's long-context pitch does not show up at
+short context and small scale. None of this contradicts the paper's
+results at 3,000$\times$ the token budget. It bounds where the benefit
+begins, and the bound is above what a laptop reaches.
+
+\section{Method}
+
+\subsection{Implementation}
+We implement a pre-norm decoder-only transformer in
+MLX\supercite{mlx2023} with rotary position
+embeddings\supercite{su2024roformer}, SwiGLU\supercite{shazeer2020glu},
+RMSNorm\supercite{zhang2019rmsnorm}, and tied embeddings, with standard
+multi-head attention\supercite{vaswani2017attention} as the baseline.
+The differential variant follows the paper's canonical form. Diff heads
+pair adjacent attention heads with an interleaved split, $\lambda$
+vectors are stored fp32 with the paper's depth schedule, and a per-head
+RMSNorm applies after the subtraction. The forward path uses the
+linearity identity $(A_1 - \lambda A_2)V = A_1 V - \lambda A_2 V$, so
+no $T \times T$ attention map is materialized.
+
+The forward path runs on custom Metal kernels written through
+\texttt{mx.fast.metal\_kernel}. A row-wise softmax kernel and a causal
+scaled-dot-product-attention kernel with separate query-key and value
+widths, so the doubled-V diff head runs in one dispatch. Autograd hooks
+delegate backward to MLX. Kernel outputs match MLX's own operators
+inside the bf16 ULP-noise band.
+
+\subsection{Verification}
+Correctness rests on three independent checks. First, the model output
+matches the vendored official PyTorch reference at $3.6 \times 10^{-7}$
+max absolute difference on the CPU stream. This check caught two real
+convention bugs during development, an interleaved head-pair split the
+internal oracle missed because the oracle shared the bug, and a RoPE
+convention mismatch. Second, the custom kernels are validated against
+MLX's built-in operators across the full shape matrix, forward and
+backward. Third, the entire Stage 0 experiment is replicated in PyTorch
+on an NVIDIA RTX 3070 Ti. Same algorithm, different framework,
+different silicon. The paired delta tracks across stacks, with the same
+crossover step and the same order of magnitude, so the observed deltas
+are not framework artifacts.
+
+\subsection{Paired initialization}
+Both variants are built from one seed and share every weight that has a
+counterpart, byte-identical. Data order is identical between variants.
+The paired delta from a single seed then reflects the architectural
+difference plus run noise, not initialization luck. The seed band in
+Section~\ref{sec:stage0} measures how much run noise remains.
+
+\section{Experimental setup}
+Two scales, both on FineWeb-Edu\supercite{penedo2024fineweb} tokenized
+with \texttt{cl100k\_base} at context length 2048. Stage 0 trains 30M
+parameters for 100M tokens. Stage 1 trains 162M parameters for 2.0B
+tokens with effective batch 32, peak learning rate $4 \times 10^{-4}$,
+and 1000-step warmup, in bf16 mixed precision. Training runs on one
+Apple M5 Max with MLX. The cross-stack replication runs on an NVIDIA
+RTX 3070 Ti in PyTorch. Held-out validation is a disjoint document
+split. The evaluation metric is val loss in nats, measured on the same
+tokens for both variants of a pair.
+
+Hardware constraints are part of the study. Appendix~\ref{app:silicon}
+reports the throughput, memory, thermal, and power-delivery behavior of
+sustained training on a laptop, including two throttling modes that do
+not announce themselves.
+
+\section{Results}
+
+\subsection{Stage 0: the paired delta is seed noise}
+\label{sec:stage0}
+Our first Stage 0 run showed diff ahead by \StageZeroRecordedDelta{}
+nats on held-out loss, matching the paper's direction. Rerunning the
+paired experiment at four more seeds dissolves the result.
+Table~\ref{tab:stage0} and Figure~\ref{fig:band} show the band. The
+mean delta across the four reruns is \StageZeroMeanDelta{} nats with
+sample standard deviation \StageZeroStdDelta{}, spanning
+\StageZeroMinDelta{} to \StageZeroMaxDelta{}, and one seed flips sign.
+A single-seed delta of $\pm$0.02 nats at this scale carries no
+information about the architecture. This is the paper's central
+methodological point. Small-scale architecture comparisons need either
+paired seeds in a band or an effect larger than the band, and ours was
+neither.
+
+\begin{table}[tbp]
+\centering
+\input{generated/stage0_table}
+\caption{Stage 0 (30M params, 100M tokens) paired val loss by seed.
+Seed 0 is the original run on the first data build, recorded before the
+band was run. Seeds 1 to 4 rerun the full paired experiment on a
+rebuilt tokenization of the same corpus. Generated from committed run
+logs.}
+\label{tab:stage0}
+\end{table}
+
+\begin{figure}[tbp]
+\centering
+\input{generated/stage0_band}
+\caption{The paired delta by seed. Negative favors differential
+attention. The recorded single-seed win (seed 0) sits inside the band
+of the four reruns, which includes a sign flip. Generated from the same
+evidence as Table~\ref{tab:stage0}.}
+\label{fig:band}
+\end{figure}
+
+\subsection{Stage 1: train-loss win, held-out loss}
+At 162M parameters and 2.0B tokens the two loss signals disagree, and
+the disagreement is the finding. Differential attention finishes
+\StageOneTrainDeltaSigned{} nats ahead on train loss and
+\StageOneValDeltaSigned{} nats behind on held-out validation
+(Table~\ref{tab:stage1}, Figure~\ref{fig:curves}). The late run gives
+it away. Over the final 5000 steps diff's val loss rises from
+\StageOneDiffValLateRise{} nats while vanilla's falls from
+\StageOneVanillaValLateFall{}. Diff is memorizing the training stream
+harder, not learning a better function.
+
+\begin{table}[tbp]
+\centering
+\input{generated/stage1_table}
+\caption{Stage 1 (162M params, 2.0B tokens) endpoints, seed 0, paired
+init, identical data order. Positive $\delta$ favors vanilla. Generated
+from the released training logs.}
+\label{tab:stage1}
+\end{table}
+
+\begin{figure}[tbp]
+\centering
+\input{generated/stage1_curves}
+\caption{Stage 1 train curves (thin, downsampled, from step 2000) and
+held-out val points (marked). Diff holds the lower train loss
+throughout while vanilla takes the lower val loss from mid-run on.
+Generated from the released training logs.}
+\label{fig:curves}
+\end{figure}
+
+\subsection{No positional structure in the delta}
+Differential attention's pitch is that cancelling common-mode attention
+noise matters most for long or noisy context, so its advantage should
+grow with token position. We bin held-out negative log-likelihood by
+position across the 2048-token window on both final checkpoints
+(Table~\ref{tab:posbin}, Figure~\ref{fig:posbin}). Vanilla is ahead in
+every bin. The delta is flat, spanning \PosbinMinDelta{} to
+\PosbinMaxDelta{} nats with \PosbinLastBinDelta{} in the last bin, and
+the overall gap of \PosbinOverallDelta{} nats matches the training-time
+val gap measured on a different token budget. No widening with
+position, no crossover at long range. The mechanism's designed
+advantage does not appear in this regime.
+
+\begin{table}[tbp]
+\centering
+\input{generated/posbin_table}
+\caption{Held-out NLL by token position, both Stage 1 final
+checkpoints. Positive $\delta$ favors vanilla. Generated from the
+committed per-position evaluation.}
+\label{tab:posbin}
+\end{table}
+
+\begin{figure}[tbp]
+\centering
+\input{generated/posbin_fig}
+\caption{The positional delta is flat. If common-mode cancellation
+helped long context here, the curve would fall with position. Generated
+from the same evidence as Table~\ref{tab:posbin}.}
+\label{fig:posbin}
+\end{figure}
+
+\FloatBarrier
+
+\section{Limitations}
+Scale. This study sits three orders of magnitude below the original
+paper's 3B-parameter, 1T-token setting. Nothing here refutes the
+paper's results in its own regime. The claim is only that the benefit
+is absent in ours.
+
+Context and evals. The window is 2048 tokens and the metric is language
+model loss. The paper's strongest results are long-context and
+retrieval evals we do not run. The position-binned analysis is a proxy
+for the long-context claim, not a replacement.
+
+Seeds. The seed band is measured at Stage 0, where a run costs an hour.
+Stage 1 remains a single seed. Its noise floor should be lower with
+twenty times the tokens, and the overfitting signature is a mechanism
+rather than a point estimate, but the Stage 1 delta does not carry a
+measured band.
+
+Data build. The four band seeds ran on a rebuilt tokenization with a
+smaller held-out split than the original build. The band is internally
+consistent. The recorded seed 0 delta crosses builds and carries that
+caveat.
+
+One machine, author-run. Training, evaluation, and analysis are all
+ours, on hardware whose thermal and power behavior varied across runs
+(Appendix~\ref{app:silicon}). Loss comparisons are unaffected. Wall
+clock and throughput numbers are descriptive, not controlled.
+
+\section{Conclusion}
+At laptop scale, differential attention gave us nothing. A paired
+seed band shows our initial small-scale win was seed noise, the
+scaled-up run trades generalization for memorization, and the
+positional profile shows no trace of the long-context advantage the
+mechanism is designed for. The negative is bounded and honest. The
+mechanism's reported gains live at a scale this study does not reach,
+and anyone evaluating it below that scale should expect what we
+measured, a delta indistinguishable from noise. The methodological
+contribution stands apart from the negative. Byte-identical paired
+initialization, a reference cross-check strict enough to catch
+convention bugs, and a cross-stack replication make single-machine
+architecture comparisons meaningful. Without them, our seed 0 result
+would have been reported as a win.
+
+\appendix
+\section{Training on Apple Silicon}
+\label{app:silicon}
+Numbers a reader planning similar work will want. Sustained bf16
+training of the 162M model on an M5 Max runs about 14k tokens per
+second at context 2048, roughly 5 to 10 percent of nominal bf16 peak.
+The workload is dispatch-bound, not compute-bound, which is what the
+custom kernels target.
+
+Per-token cost is flat in micro-batch until unified memory runs out,
+then falls off a cliff. A micro-batch of 32 at Stage 1 exceeded the
+128 GB ceiling and swap-thrashed to 950 tokens per second. Micro-batch
+8 with gradient accumulation restored 14k. When a run is slow, check
+swap before checking math.
+
+Two throttles do not announce themselves. Under the stock fan curve a
+closed laptop thermal-throttles within ten minutes of sustained
+training. Forced fans and cross-flow hold throughput flat for days.
+Separately, charging through a 100 W Thunderbolt dock instead of the
+140 W first-party brick capped GPU clocks while the chip sat cool at
+73$^\circ$C, with the battery slowly draining under a reported
+charging state. A low temperature does not rule out throttling.
+Confirm the negotiated adapter wattage before benchmarking, and state
+cooling and power conditions with any published throughput number.

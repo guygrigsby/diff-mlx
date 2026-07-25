@@ -21,3 +21,13 @@ docs/paper/main.log
 docs/paper/main.out
 docs/paper/main.bbl
 docs/paper/arxiv.tar.gz
+
+# rescience build byproducts (copies + generated)
+docs/paper/rescience/generated/
+docs/paper/rescience/references.bib
+docs/paper/rescience/metadata.tex
+docs/paper/rescience/*.aux
+docs/paper/rescience/*.log
+docs/paper/rescience/*.bbl
+docs/paper/rescience/*.bcf
+docs/paper/rescience/*.run.xml

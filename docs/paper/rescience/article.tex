@@ -1,0 +1,20 @@
+\documentclass{rescience}
+\usepackage{booktabs}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepackage{placeins}
+
+% Every result number comes from generated/, copied in by the Makefile from
+% ../generated (built by ../gen.py over ../data). Do not hand-edit.
+\input{generated/summary_macros}
+
+\begin{document}
+\input{header.tex}
+\input{content.tex}
+
+\hypersetup{linkcolor=black,urlcolor=darkgray}
+\renewcommand\emph[1]{{\bfseries #1}}
+\setlength\bibitemsep{0pt}
+\printbibliography
+
+\end{document}
