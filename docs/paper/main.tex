@@ -98,10 +98,12 @@ inside the bf16 ULP-noise band.
 Correctness rests on three independent checks. First, the model output
 matches the vendored official PyTorch reference at $3.6 \times 10^{-7}$
 max absolute difference on the CPU stream. This check caught two real
-convention bugs during development. One was an interleaved head-pair split the internal oracle missed because the oracle shared the bug. The other was a RoPE convention mismatch. Second, the custom kernels are validated against
-MLX's built-in operators across the full shape matrix, forward and
-backward. Third, the entire Stage 0 experiment is replicated in PyTorch
-on an NVIDIA RTX 3070 Ti. Same algorithm, different framework,
+convention bugs during development. One was an interleaved head-pair 
+split the internal oracle missed because the oracle shared the bug. 
+The other was a RoPE convention mismatch. Second, the custom kernels 
+are validated against MLX's built-in operators across the full shape matrix,
+forward and backward. Third, the entire Stage 0 experiment is replicated 
+in PyTorch on an NVIDIA RTX 3070 Ti. Same algorithm, different framework,
 different silicon. The paired delta tracks across stacks, with the same
 crossover step and the same order of magnitude, so the observed deltas
 are not framework artifacts.
@@ -282,7 +284,7 @@ logs, evaluation scripts and both Stage 1 checkpoints are at
 \section{Training on Apple Silicon}
 \label{app:silicon}
 Numbers a reader planning similar work will want. Sustained bf16
-training of the 162M model on an M5 Max runs about 14k tokens per
+training of the 162M model on an M5 Max 14 inch runs about 14k tokens per
 second at context 2048, roughly 5 to 10 percent of nominal bf16 peak.
 The workload is dispatch-bound, not compute-bound, which is what the
 custom kernels target.
@@ -296,12 +298,19 @@ swap before checking math.
 Two throttles do not announce themselves. Under the stock fan curve a
 closed laptop thermal-throttles within ten minutes of sustained
 training. Forced fans and cross-flow hold throughput flat for days.
-Separately, charging through a 100 W Thunderbolt dock instead of the
-140 W first-party brick capped GPU clocks while the chip sat cool at
-73$^\circ$C, with the battery slowly draining under a reported
-charging state. A low temperature does not rule out throttling.
-Confirm the negotiated adapter wattage before benchmarking, and state
-cooling and power conditions with any published throughput number.
+Separately, mid-run throughput dropped about ten percent while the chip
+sat cool at 73$^\circ$C, with the battery slowly draining under a
+reported charging state. The cause was power delivery. The machine was
+charging through a Thunderbolt dock that also drove a monitor, and
+switching to the direct first-party brick restored clocks and
+throughput. The 14-inch machine negotiates at most 100 W regardless of
+the adapter (its fast-charge spec is 96 W and it does not use the
+higher EPR profile), so sustained training plus charging leaves little
+headroom, and a dock delivering less than its rated upstream power
+pushes the shortfall onto the battery and the GPU clocks. A low
+temperature does not rule out throttling. Confirm the negotiated
+adapter wattage before benchmarking, and state cooling and power
+conditions with any published throughput number.
 
 \bibliographystyle{plain}
 \bibliography{references}

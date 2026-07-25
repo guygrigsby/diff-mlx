@@ -55,7 +55,7 @@ Data shards and training runs are gitignored (see `.gitignore`); only code, docs
 
 - **Apple Silicon throughput is dispatch-bound** at these shapes (~14k tok/s, ~5-10% of bf16 peak). macmon's GPU-% is utilization, not throughput.
 - **The swap cliff.** Per-token cost is flat, then it falls off a cliff at the unified-memory budget. `micro_batch=32` thrashed swap and read 14× slow; `micro_batch=8 grad_accum=4` fixed it. See `docs/2026-05-22-swap-cliff-and-scope-restore.md`.
-- **Thermal and power throttling on a laptop.** The stock fan curve throttles within ~10 min; aggressive cooling roughly doubles sustained throughput. And a low temperature doesn't rule out throttling: a Thunderbolt dock quietly capped charging at 100W (vs the 140W MagSafe), shaving GPU clocks while the chip sat cool at 73°C. See `docs/2026-05-24-thermal-empirical-notes.md`.
+- **Thermal and power throttling on a laptop.** The stock fan curve throttles within ~10 min; aggressive cooling roughly doubles sustained throughput. And a low temperature doesn't rule out throttling: a Thunderbolt dock sharing power with a monitor delivered less than the sustained draw, shaving GPU clocks while the chip sat cool at 73°C. The 14-inch M5 Max negotiates at most 100W regardless of adapter (96W fast-charge spec, no EPR profile), so headroom under training load is thin. See `docs/2026-05-24-thermal-empirical-notes.md` (correction note there: the original 140W framing was wrong, this machine can't take 140W).
 
 ## Docs
 

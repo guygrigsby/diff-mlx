@@ -9,6 +9,13 @@
 > with a sign flip at seed 3, so the Stage 0 −0.020 "win" was seed noise
 > and there was no small-scale effect for Stage 1 to kill. See
 > [`2026-07-25-stage0-seed-band.md`](2026-07-25-stage0-seed-band.md).
+>
+> Also corrected 2026-07-25: the power-delivery paragraph's 140W framing.
+> The 14-inch M5 Max negotiates at most 100W regardless of adapter (96W
+> fast-charge spec, no EPR profile; 140W is 16-inch only), so "re-negotiated
+> to 140W" is wrong. The observation and the dock-shortfall mechanism stand.
+> See the correction note in
+> [`2026-05-24-thermal-empirical-notes.md`](2026-05-24-thermal-empirical-notes.md).
 > This document is otherwise left as written.
 
 ## TL;DR

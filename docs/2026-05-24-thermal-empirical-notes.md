@@ -1,6 +1,18 @@
 # Thermal vs throughput on M5 Max for sustained MLX training
 
 **Date:** 2026-05-24 (active, updated as findings accumulate)
+
+> **Correction 2026-07-25:** the power-delivery section below frames the dock
+> incident as 100W dock vs 140W MagSafe, with recovery attributed to
+> "re-negotiating to 140W". Wrong for this machine. The 14-inch M5 Max
+> (Mac17,7) negotiates at most 100W regardless of adapter; its fast-charge
+> spec is 96W and it does not request the 28V EPR profile (140W is a 16-inch
+> spec). Verified 2026-07-25 against Apple's tech specs and live
+> `system_profiler` on this machine showing a 100W contract. The observation
+> stands (throughput drop while cool, battery drain under "charging",
+> recovery after switching to the direct brick). The corrected mechanism is a
+> dock sharing upstream power with a monitor delivering less than the
+> sustained draw, with at most 100W of headroom to begin with.
 **Context:** Stage 1 paired run on M5 Max, 162M-param transformer, bf16 forward via `LinearAMP`, `mx.compile`-wrapped grad-accum training step. Effective batch 32 (`micro_batch=8 grad_accum=4`). Block size 2048.
 
 ## TL;DR
