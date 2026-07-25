@@ -2,11 +2,11 @@
 
 MLX implementation of the Differential Transformer (Ye et al., ICLR 2025; [arXiv 2410.05258](https://arxiv.org/abs/2410.05258)) on Apple Silicon, with custom Metal kernels for the differential-attention forward pass. A small-scale, controlled, paired-init reproduction of the diff-attn mechanism, checked against the vendored Microsoft PyTorch reference and a second run in PyTorch on NVIDIA CUDA.
 
-**Status: done.** Full writeup: [`docs/2026-05-23-final-writeup.md`](docs/2026-05-23-final-writeup.md).
+**Status: done.** Full writeup: [`docs/2026-05-23-final-writeup.md`](docs/2026-05-23-final-writeup.md). Seed band addendum: [`docs/2026-07-25-stage0-seed-band.md`](docs/2026-07-25-stage0-seed-band.md). Paper draft: `docs/paper/` (`make paper`).
 
 ## The result, in a paragraph
 
-At Stage 0 (30M params, 100M tokens) the paired δ reproduced the paper's direction: diff beat vanilla by 0.020 nats on held-out val. At Stage 1 (162M params, 2.0B tokens) it didn't. Diff finished 0.11 nats ahead on *train* loss and 0.035 nats behind vanilla on held-out val, with a clear overfitting signature. Binning the held-out loss by position put vanilla uniformly ahead across the whole 2048-token window, with no widening at later positions, so the long-context edge diff is built for didn't show up either. So in this small-scale, short-context, single-seed regime, diff-attn shows no generalization benefit. This sits three orders of magnitude below the paper's 3B-param / 1T-token setup, so it refutes nothing about the paper. It's an honest negative for the small-scale regime.
+At Stage 0 (30M params, 100M tokens) the first paired δ reproduced the paper's direction: diff beat vanilla by 0.020 nats on held-out val. A four-seed rerun band (2026-07-25) dissolved it: δ = −0.016 ± 0.023 nats with a sign flip at seed 3, so a single-seed δ of that size is seed noise. At Stage 1 (162M params, 2.0B tokens) diff finished 0.11 nats ahead on *train* loss and 0.035 nats behind vanilla on held-out val, with a clear overfitting signature. Binning the held-out loss by position put vanilla uniformly ahead across the whole 2048-token window, with no widening at later positions, so the long-context edge diff is built for didn't show up either. So in this small-scale, short-context regime, diff-attn shows no generalization benefit; there was no Stage 0 effect for the scale-up to kill. This sits three orders of magnitude below the paper's 3B-param / 1T-token setup, so it refutes nothing about the paper. It's an honest negative for the small-scale regime.
 
 ![Stage 1 diff vs vanilla](docs/stage1_diff_vs_vanilla.png)
 
@@ -44,9 +44,12 @@ python scripts/stage1_paired.py --data_seed 0 --model_seed 0 --out_root runs/sta
 
 # position-binned held-out eval on the final checkpoints
 python scripts/eval_position_binned.py
+
+# Stage 0 seed band (seeds 1-4, ~8h)
+scripts/stage0_seed_band.sh
 ```
 
-Data shards and training runs are gitignored (see `.gitignore`); only code, docs, and the small reference fixture are tracked.
+Data shards and training runs are gitignored (see `.gitignore`); only code, docs, and the small reference fixture are tracked. Prebuilt tokenized shards (2026-07-24 build) are on HF: [`guygrigsby/diff-mlx-shards`](https://huggingface.co/datasets/guygrigsby/diff-mlx-shards) (private), which skips the download+tokenize step.
 
 ## Findings worth reading even if you don't care about diff-attn
 
@@ -57,6 +60,8 @@ Data shards and training runs are gitignored (see `.gitignore`); only code, docs
 ## Docs
 
 - `docs/2026-05-23-final-writeup.md` is the full writeup. Start there.
+- `docs/2026-07-25-stage0-seed-band.md` is the seed band that shows the Stage 0 δ is noise.
+- `docs/paper/` is the paper draft; `make paper` regenerates all numbers from `docs/paper/data/` and builds the PDF, `make arxiv` builds the submission bundle.
 - `docs/2026-05-20-diffattn-mlx-reproduction-design.md` is the design; kernel specs in §5.1, §5.1b, §7 are authoritative.
 - `docs/2026-05-24-thermal-empirical-notes.md` covers thermal + power throttling on the M5 Max.
 - `docs/2026-05-22-swap-cliff-and-scope-restore.md` is the swap-cliff investigation.

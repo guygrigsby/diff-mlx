@@ -4,6 +4,13 @@
 **Author:** Guy J. Grigsby
 **Repo:** [github.com/guygrigsby/diff-mlx](https://github.com/guygrigsby/diff-mlx)
 
+> **Update 2026-07-25:** the single-seed caveat below is now measured. A
+> four-seed rerun band puts the Stage 0 paired δ at −0.016 ± 0.023 nats
+> with a sign flip at seed 3, so the Stage 0 −0.020 "win" was seed noise
+> and there was no small-scale effect for Stage 1 to kill. See
+> [`2026-07-25-stage0-seed-band.md`](2026-07-25-stage0-seed-band.md).
+> This document is otherwise left as written.
+
 ## TL;DR
 
 Reimplemented the Differential Transformer (Ye et al., ICLR 2025; arXiv 2410.05258) in MLX on Apple Silicon, with custom Metal kernels for the differential-attention forward path (softmax + causal SDPA). Checked correctness three ways: against the vendored Microsoft PyTorch reference at 1e-7 (CPU stream), v0 vs v1 numerical agreement, and a separate PyTorch run on an NVIDIA RTX 3070 Ti.
