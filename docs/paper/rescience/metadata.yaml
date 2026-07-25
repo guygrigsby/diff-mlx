@@ -56,7 +56,7 @@ abstract: "The Differential Transformer reports consistent gains over standard
            mechanism helps at the scale a single laptop can reach. We
            reimplement differential attention in MLX on Apple Silicon with
            custom Metal kernels, verify it against the official PyTorch
-           reference at 1e-7, and replicate the training run in PyTorch on
+           reference at 1e-7 and replicate the training run in PyTorch on
            NVIDIA CUDA to rule out framework artifacts. Every comparison is
            paired. Both variants start from byte-identical shared weights and
            see identical data order, so a single-run delta is meaningful. At
@@ -72,8 +72,7 @@ abstract: "The Differential Transformer reports consistent gains over standard
            the mechanism is built for does not appear. These results sit
            three orders of magnitude below the paper's setting and refute
            nothing about it. They show no benefit in the small-scale,
-           short-context regime. All code, kernels, training logs, and
-           checkpoints are released."
+           short-context regime. All code, kernels, training logs and checkpoints are released."
 
 # Bibliography file (yours)
 bibliography: references.bib

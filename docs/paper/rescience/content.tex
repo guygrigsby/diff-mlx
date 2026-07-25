@@ -37,11 +37,11 @@ begins, and the bound is above what a laptop reaches.
 We implement a pre-norm decoder-only transformer in
 MLX\supercite{mlx2023} with rotary position
 embeddings\supercite{su2024roformer}, SwiGLU\supercite{shazeer2020glu},
-RMSNorm\supercite{zhang2019rmsnorm}, and tied embeddings, with standard
+RMSNorm\supercite{zhang2019rmsnorm} and tied embeddings, with standard
 multi-head attention\supercite{vaswani2017attention} as the baseline.
 The differential variant follows the paper's canonical form. Diff heads
 pair adjacent attention heads with an interleaved split, $\lambda$
-vectors are stored fp32 with the paper's depth schedule, and a per-head
+vectors are stored fp32 with the paper's depth schedule and a per-head
 RMSNorm applies after the subtraction. The forward path uses the
 linearity identity $(A_1 - \lambda A_2)V = A_1 V - \lambda A_2 V$, so
 no $T \times T$ attention map is materialized.
@@ -57,9 +57,7 @@ inside the bf16 ULP-noise band.
 Correctness rests on three independent checks. First, the model output
 matches the vendored official PyTorch reference at $3.6 \times 10^{-7}$
 max absolute difference on the CPU stream. This check caught two real
-convention bugs during development, an interleaved head-pair split the
-internal oracle missed because the oracle shared the bug, and a RoPE
-convention mismatch. Second, the custom kernels are validated against
+convention bugs during development. One was an interleaved head-pair split the internal oracle missed because the oracle shared the bug. The other was a RoPE convention mismatch. Second, the custom kernels are validated against
 MLX's built-in operators across the full shape matrix, forward and
 backward. Third, the entire Stage 0 experiment is replicated in PyTorch
 on an NVIDIA RTX 3070 Ti. Same algorithm, different framework,
@@ -86,7 +84,7 @@ split. The evaluation metric is val loss in nats, measured on the same
 tokens for both variants of a pair.
 
 Hardware constraints are part of the study. Appendix~\ref{app:silicon}
-reports the throughput, memory, thermal, and power-delivery behavior of
+reports the throughput, memory, thermal and power-delivery behavior of
 sustained training on a laptop, including two throttling modes that do
 not announce themselves.
 
@@ -213,7 +211,7 @@ smaller held-out split than the original build. The band is internally
 consistent. The recorded seed 0 delta crosses builds and carries that
 caveat.
 
-One machine, author-run. Training, evaluation, and analysis are all
+One machine, author-run. Training, evaluation and analysis are all
 ours, on hardware whose thermal and power behavior varied across runs
 (Appendix~\ref{app:silicon}). Loss comparisons are unaffected. Wall
 clock and throughput numbers are descriptive, not controlled.
@@ -229,7 +227,7 @@ and anyone evaluating it below that scale should expect what we
 measured, a delta indistinguishable from noise. The methodological
 contribution stands apart from the negative. Byte-identical paired
 initialization, a reference cross-check strict enough to catch
-convention bugs, and a cross-stack replication make single-machine
+convention bugs and a cross-stack replication make single-machine
 architecture comparisons meaningful. Without them, our seed 0 result
 would have been reported as a win.
 
