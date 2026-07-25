@@ -14,3 +14,10 @@ data/raw/
 # IDE/tool
 .antigravitycli/
 .DS_Store
+
+# paper build byproducts
+docs/paper/main.aux
+docs/paper/main.log
+docs/paper/main.out
+docs/paper/main.bbl
+docs/paper/arxiv.tar.gz

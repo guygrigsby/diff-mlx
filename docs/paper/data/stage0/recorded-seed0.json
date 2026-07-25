@@ -1,0 +1,5 @@
+{
+  "_provenance": "Recorded Stage 0 seed 0 result from the original 2026-05 data build (docs/2026-05-23-final-writeup.md). Not rerun on the 2026-07-24 shard rebuild; the metrics.jsonl for this run predates this checkout.",
+  "vanilla_val_full": 4.720,
+  "diff_val_full": 4.700
+}

@@ -1,0 +1,32 @@
+{
+  "model": {
+    "dim": 768,
+    "n_layers": 12,
+    "n_heads_vanilla": 12,
+    "qk_head_dim": 64,
+    "vocab_size": 100277,
+    "mlp_intermediate": 2048,
+    "block_size": 2048,
+    "rope_base": 10000.0,
+    "rms_eps": 1e-05,
+    "tie_embeddings": true,
+    "amp_dtype": "bfloat16"
+  },
+  "train": {
+    "peak_lr": 0.0004,
+    "warmup_steps": 1000,
+    "total_tokens": 2000000000,
+    "micro_batch": 8,
+    "grad_accum": 4,
+    "weight_decay": 0.1,
+    "adam_beta1": 0.9,
+    "adam_beta2": 0.95,
+    "adam_eps": 1e-08,
+    "grad_clip": 1.0,
+    "eval_every": 1000,
+    "full_eval_every": 5000,
+    "monitoring_tokens": 2000000,
+    "full_eval_tokens": 75000000,
+    "save_every": 500
+  }
+}
